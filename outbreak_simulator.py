@@ -2,7 +2,42 @@
 import random
 import numpy as np
 import matplotlib.pyplot as plt
-import networkx as nx 
+import networkx as nx
+from scipy.stats import gamma
+
+
+class InfectionRate:
+	def __init__(self, rate, stochastic=False):
+		self.rate = rate
+		self.stochastic = stochastic
+
+		if not stochastic:
+			# Constant function
+			self._get_rate = lambda _: rate
+		else:
+			# Use gamma distribution for infection rate
+			gamma_pdf = lambda t: gamma.pdf(t, a=2.25, scale=2.8)
+			# Store values up to 50 days (unlikely to go past that)
+			gamma_cache = [gamma_pdf(t) for t in range(50)]
+			# Renormalize s.t. peak == rate
+			c = rate / max(gamma_cache)
+			gamma_cache = [c * g for g in gamma_cache]
+			self._get_rate = lambda t: gamma_cache[t]
+
+	def __call__(self, duration=None):
+		return self._get_rate(duration)
+
+
+class RecoveryRate:
+	def __init__(self, recovery_time=14, post_recovery_rate=1):
+		self.recovery_time = recovery_time
+		self.post_recovery_rate = post_recovery_rate
+
+	def __call__(self, duration=None):
+		if duration < self.recovery_time:
+			return 1e-10  # effectively 0, just to avoid ZeroDivisionError
+		else:
+			return self.post_recovery_rate
 
 
 class TestingPool:
@@ -12,10 +47,10 @@ class TestingPool:
 		self.tested_chunks = self._chunk_generator(tested_nodes, num_chunks)
 
 		# Default test schedule is everyday
-		# Assuming `current_time` == 1 is the first weekday (i.e. Monday)
+		# Assuming `t` == 1 is the first weekday (i.e. Monday)
 		# Example of a schedule where we test everyday except weekends:
 		#     [True, True, True, True, True, False, False]
-		self.current_time = 1
+		self.t = 1
 		self.schedule = schedule
 
 	def _chunk_generator(self, tested_nodes, num_chunks):
@@ -32,9 +67,9 @@ class TestingPool:
 		Get next round of testing subjects.
 		"""
 		testing_round = []
-		if self.schedule[ (self.current_time - 1) % len(self.schedule) ]:
+		if self.schedule[ (self.t - 1) % len(self.schedule) ]:
 			testing_round = next(self.tested_chunks)
-		self.current_time += 1
+		self.t += 1
 		return testing_round
 
 
@@ -58,34 +93,35 @@ def update_dynamics(G, infection_rate, recovery_rate, dt=1):
 
 		# Susceptible -> Infected
 		if node_data["state"] == "S":
-			# Get infectious and non-quarantined neighbors
-			adj_infected = [
-				n for n in G.adj[node]
-				if G.nodes[n]["state"] == "I" \
-				   and not G.nodes[n]["quarantined"]
-			]
-			# If one or more transmissions happen, the node gets infected
-			p_infection = 1 - (1 - dt*infection_rate) ** len(adj_infected)
-			infected = 1 == np.random.binomial(1, p_infection)
-			if infected:
-				node_data["next_state"] = "I"
+			# Check infected and not quarantined neighbors
+			for adj in G.adj[node]:
+				infected = G.nodes[adj]["state"] == "I"
+				quarantined = G.nodes[adj]["quarantined"]
+				if infected and not quarantined:
+					# Sample the daily probability of infecting a neighbor
+					b = infection_rate(G.nodes[adj]["duration"])
+					if np.random.binomial(int(dt), b) > 0:
+						node_data["next_state"] = "I"
+						break
 
 		# Infected -> Removed
 		if node_data["state"] == "I":
-			if node_data["duration"] >= 1 / recovery_rate:
+			# Sample the daily probability of recovering
+			r = recovery_rate(node_data["duration"])
+			if np.random.binomial(int(dt), r) > 0:
 				node_data["next_state"] = "R"
 
 	return G
 
 
-def update_tests(G, tested_nodes, current_time):
+def update_tests(G, t, tested_nodes):
 	"""
 	Update tests (retest testing subjects).
 
 	Args:
 		G: graph of community.
+		t: current time.
 		tested_nodes: nodes from G to be tested.
-		current_time: current time.
 		resample: resample test subjects randomly every testing round.
 
 	Returns:
@@ -94,7 +130,7 @@ def update_tests(G, tested_nodes, current_time):
 
 	tested_positive = False
 	for test_node in tested_nodes:
-		G.nodes[test_node]["last_test"] = current_time
+		G.nodes[test_node]["last_test"] = t
 		infectious = G.nodes[test_node]["state"] == "I"
 		G.nodes[test_node]["quarantined"] = infectious
 		tested_positive = tested_positive or infectious
@@ -102,7 +138,7 @@ def update_tests(G, tested_nodes, current_time):
 	return G, tested_positive
 
 
-def update_state(G, SIR, current_time, quarantine_length):
+def update_state(G, SIR, t, quarantine_length):
 	"""
 	Update the state/attributes of network G.
 
@@ -110,7 +146,7 @@ def update_state(G, SIR, current_time, quarantine_length):
 		G: graph of community.
 		SIR: a dict of compartment sizes indexed by the
 			 compartment's name (e.g. "S" for susceptible).
-		current_time: current time.
+		t: current time.
 		quarantine_length: minimum time to quarantine
 
 	Returns:
@@ -128,7 +164,7 @@ def update_state(G, SIR, current_time, quarantine_length):
 
 		# Check and update quarantine state
 		if node_data["quarantined"]:
-			quaran_time = current_time - node_data["last_test"]
+			quaran_time = t - node_data["last_test"]
 			node_data["quarantined"] = quaran_time < quarantine_length
 
 	return G, SIR
@@ -137,8 +173,8 @@ def update_state(G, SIR, current_time, quarantine_length):
 def outbreak_simulation(G,
 					    dt=1,
 					    initial_infected=1,
-					    infection_rate=0.1,
-					    recovery_rate=0.2,
+					    infection_rate=InfectionRate(0.1, True),
+					    recovery_rate=RecoveryRate(5, 1/3),
 					    testing_capacity=0.01,
 					    testing_rounds=1,
 					    testing_interval=1,
@@ -158,9 +194,10 @@ def outbreak_simulation(G,
 		dt: time step.
 		initial_infected: number of infected nodes in the beginning.
 		infection_rate: infection rate (in units of 1/dt).
-		recovery_rate: recovery/removal rate (in units of 1/dt).
+		recovery_rate: recovery/removal rate (I -> R rate).
 		testing_capacity: max tests possible every `testing_interval`,
 		                  measured as a fraction of the whole population.
+		testing_rounds: how many rounds to divide the testing pool.
 		testing_interval: testing interval (in units of dt).
 		quarantine_length: time should be spent in quarantine.
 		report_interval: reporting interval for SIR values (in dt).
@@ -171,7 +208,7 @@ def outbreak_simulation(G,
 	"""
 
 	SIR_record = []
-	current_time = 0
+	t = 0
 
 	 # XXX
 	if reproduce:
@@ -200,8 +237,8 @@ def outbreak_simulation(G,
 	}
 
 	# Initialize default attributes of nodes (i.e. people):
-	# - state: the node's state at `current_time`
-	# - next_state: the node's state at `current_time+dt`, if any
+	# - state: the node's state at `t`
+	# - next_state: the node's state at `t+dt`, if any
 	# - duration: the amount of time the node spent in the current state
 	# - last_test: the time of the last test
 	# - quarantined: whether the node is currently quarantined or not
@@ -227,21 +264,21 @@ def outbreak_simulation(G,
 
 		# Update dynamics of network
 		G = update_dynamics(G, infection_rate, recovery_rate, dt)
-		current_time += dt
+		t += dt
 
 		# Retest every testing_interval
-		if round(current_time / dt) % testing_interval == 0:
+		if round(t / dt) % testing_interval == 0:
 			testing_round = testing_pool.next_round()
-			G, tested_positive = update_tests(G, testing_round, current_time)
+			G, tested_positive = update_tests(G, t, testing_round)
 
 		# Update state of network
-		G, SIR = update_state(G, SIR, current_time, quarantine_length)
+		G, SIR = update_state(G, SIR, t, quarantine_length)
 		SIR_record.append(tuple(SIR.values()))
 
 		# Show last SIR values
-		if round(current_time / dt) % report_interval == 0:
+		if round(t / dt) % report_interval == 0:
 			S, I, R = SIR_record[-1]
-			print(f"time = {current_time}, S = {S}, I = {I}, R = {R}")
+			print(f"time = {t}, S = {S}, I = {I}, R = {R}")
 
 	return tuple(zip(*SIR_record))
 
@@ -300,9 +337,6 @@ def main():
 	# Define network structure and outbreak configurations
 	G = nx.barabasi_albert_graph(4000, 3)
 	outbreak_config = {
-		"infection_rate": 0.1,
-		"recovery_rate": 0.2,
-		"testing_capacity": 0.01,
 		"quarantine_length": 0,
 		"report_interval": 1,
 		"testing_mode": True,
