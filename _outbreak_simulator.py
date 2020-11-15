@@ -149,7 +149,7 @@ def test(num_lines=5, max_t=30):
     plt.grid(which="major")
     plt.xlim(0, max_t)
     plt.show()
-    fig.savefig("_SIR_curves.png")
+    fig.savefig("SIR_curves_old.png")
 
 
 random.seed(123)
