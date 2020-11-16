@@ -1,9 +1,28 @@
 
 import random
+import itertools
 import numpy as np
 import matplotlib.pyplot as plt
 import networkx as nx
 from scipy.stats import gamma
+from multiprocessing import Pool
+
+
+def chunk_generator(array, num_chunks, repeat=True):
+	"""
+	Generates a cycle of `num_chunks` chunks from `array`.
+	if repeat is False, generates one cycle only.
+	"""
+	chunk_len = int(np.ceil(len(array) / num_chunks))
+	array_iter = iter(array)
+	while True:
+		subset = tuple(itertools.islice(array_iter, chunk_len))
+		if len(subset) > 0:
+			yield subset
+		elif repeat:
+			array_iter = iter(array)
+		else:
+			return
 
 
 class InfectionRate:
@@ -11,21 +30,18 @@ class InfectionRate:
 		self.rate = rate
 		self.stochastic = stochastic
 
-		if not stochastic:
-			# Constant function
-			self._get_rate = lambda _: rate
-		else:
-			# Use gamma distribution for infection rate
-			gamma_pdf = lambda t: gamma.pdf(t, a=2.25, scale=2.8)
-			# Store values up to 50 days (unlikely to go past that)
-			gamma_cache = [gamma_pdf(t) for t in range(50)]
-			# Renormalize s.t. peak == rate
-			c = rate / max(gamma_cache)
-			gamma_cache = [c * g for g in gamma_cache]
-			self._get_rate = lambda t: gamma_cache[t]
+		# Use gamma distribution for infection rate
+		gamma_pdf = lambda t: gamma.pdf(t, a=2.25, scale=2.8)
+		# Store values up to 50 days (unlikely to go past that)
+		gamma_cache = [gamma_pdf(t) for t in range(50)]
+		# Renormalize s.t. peak == rate
+		c = self.rate / max(gamma_cache)
+		gamma_cache = [c * g for g in gamma_cache]
+
+		self.gamma = gamma_cache
 
 	def __call__(self, duration=None):
-		return self._get_rate(duration)
+		return self.gamma[duration] if self.stochastic else self.rate
 
 
 class RecoveryRate:
@@ -41,10 +57,10 @@ class RecoveryRate:
 
 
 class TestingPool:
-	def __init__(self, tested_nodes, num_chunks=1, schedule=[True]):
+	def __init__(self, tested_nodes, num_rounds=1, schedule=[True]):
 
 		# Initialize a chunk / partition generator
-		self.tested_chunks = self._chunk_generator(tested_nodes, num_chunks)
+		self.tested_chunks = chunk_generator(tested_nodes, num_rounds)
 
 		# Default test schedule is everyday
 		# Assuming `t` == 1 is the first weekday (i.e. Monday)
@@ -52,15 +68,6 @@ class TestingPool:
 		#     [True, True, True, True, True, False, False]
 		self.t = 1
 		self.schedule = schedule
-
-	def _chunk_generator(self, tested_nodes, num_chunks):
-		"""
-		Generates a cycle of `num_chunks` chunks from `tested_nodes`.
-		"""
-		chunk_len = int(np.ceil(len(tested_nodes) / num_chunks))
-		while True:
-			for i in range(0, len(tested_nodes), chunk_len):
-				yield tested_nodes[i:i+chunk_len]
 
 	def next_round(self):
 		"""
@@ -128,14 +135,12 @@ def update_tests(G, t, tested_nodes):
 		Updated graph, and a flag whether a test subject was infected.
 	"""
 
-	tested_positive = False
 	for test_node in tested_nodes:
 		G.nodes[test_node]["last_test"] = t
 		infectious = G.nodes[test_node]["state"] == "I"
 		G.nodes[test_node]["quarantined"] = infectious
-		tested_positive = tested_positive or infectious
 
-	return G, tested_positive
+	return G
 
 
 def update_state(G, SIR, t, quarantine_length):
@@ -180,14 +185,10 @@ def outbreak_simulation(G,
 					    testing_interval=1,
 					    quarantine_length=14,
 					    report_interval=1000,
-					    testing_mode=False,
-					    reproduce=False):
+					    stop_if_positive=False,):
 	"""
 	Simulates the spread of an infectious disease in a community modeled
 	by the graph G.
-
-	TODO: There is a bug where the number of infections becomes
-	      very large in magnitude (could be an overflow bug?)
 
 	Args:
 		G: graph modeling the community.
@@ -201,7 +202,7 @@ def outbreak_simulation(G,
 		testing_interval: testing interval (in units of dt).
 		quarantine_length: time should be spent in quarantine.
 		report_interval: reporting interval for SIR values (in dt).
-		testing_mode: stops simulation when a test subject gets infected.
+		stop_if_positive: stops simulation when a test subject gets infected.
 
 	Returns:
 		tuple containing S, I, R values of all time steps.
@@ -210,23 +211,13 @@ def outbreak_simulation(G,
 	SIR_record = []
 	t = 0
 
-	 # XXX
-	if reproduce:
-		M = 800
-		Q = round(testing_capacity * len(G.nodes))
-		N_nodes = G.nodes
-		tested_nodes = random.sample(N_nodes, Q)
-		edges = random.sample(N_nodes,M)
-		infected_nodes = random.sample(set(edges), 1)
-	else:
-		# Infect some nodes randomly from population
-		infected_nodes = np.random.choice(G.nodes, initial_infected)
-		# Sample test subjects from population
-		num_tested_nodes = round(testing_capacity * len(G.nodes))
-		tested_nodes = np.random.choice(G.nodes, num_tested_nodes)
-
+	# Infect some nodes randomly from population
+	infected_nodes = np.random.choice(G.nodes, initial_infected)
+	# Sample test subjects from population
+	num_tested_nodes = round(testing_capacity * len(G.nodes))
+	tested_nodes = np.random.choice(G.nodes, num_tested_nodes)
 	# Create testing pool
-	testing_pool = TestingPool(tested_nodes, num_chunks=testing_rounds)
+	testing_pool = TestingPool(tested_nodes, num_rounds=testing_rounds)
 
 
 	# Track the number of nodes in each compartment
@@ -253,11 +244,10 @@ def outbreak_simulation(G,
 		G.nodes[infected_node]["state"] = "I"
 
 	# Define stopping criterion based on simulation mode
-	tested_positive = False
 	def should_stop():
 		no_infected = SIR["I"] == 0
-		stop_testing_mode = testing_mode and tested_positive
-		return no_infected or stop_testing_mode
+		positive_test = any(G.nodes[n]["state"] == "I" for n in tested_nodes)
+		return no_infected or (stop_if_positive and positive_test)
 
 	### Start simulation of network ###
 	while not should_stop():
@@ -269,7 +259,7 @@ def outbreak_simulation(G,
 		# Retest every testing_interval
 		if round(t / dt) % testing_interval == 0:
 			testing_round = testing_pool.next_round()
-			G, tested_positive = update_tests(G, t, testing_round)
+			G = update_tests(G, t, testing_round)
 
 		# Update state of network
 		G, SIR = update_state(G, SIR, t, quarantine_length)
@@ -283,7 +273,7 @@ def outbreak_simulation(G,
 	return tuple(zip(*SIR_record))
 
 
-def plot_infections(num_lines=20, max_t=30):
+def plot_infections(num_lines=10, max_t=30):
 	"""
 	Plot the average SIR curves of `num_lines` curves,
 	and show each infection curve on the plot too.
@@ -301,9 +291,9 @@ def plot_infections(num_lines=20, max_t=30):
 	testing_interval = 1
 
 	lines_shape = (num_lines, max_t+1)
-	S_lines = np.empty(lines_shape)
-	I_lines = np.empty(lines_shape)
-	R_lines = np.empty(lines_shape)
+	S_lines = np.zeros(lines_shape)
+	I_lines = np.zeros(lines_shape)
+	R_lines = np.zeros(lines_shape)
 
 	for i in range(num_lines):
 		S, I, R = outbreak_simulation(G, testing_capacity=testing_capacity,
@@ -335,11 +325,13 @@ def plot_infections(num_lines=20, max_t=30):
 
 def main():
 	# Define network structure and outbreak configurations
-	G = nx.barabasi_albert_graph(4000, 3)
+	population = 4000
+	G = nx.barabasi_albert_graph(population, 3)
 	outbreak_config = {
-		"quarantine_length": 0,
-		"report_interval": 1,
-		"testing_mode": True,
+		"testing_capacity": 400 / population,
+		"testing_rounds": 10,
+		"testing_interval": 1,
+		"quarantine_length": 14,
 	}
 	# Run the simulation
 	S, I, R = outbreak_simulation(G, **outbreak_config)
@@ -354,9 +346,7 @@ def main():
 
 
 if __name__ == '__main__':
-	
 	random.seed(123)
 	np.random.seed(123)
-
 	plot_infections()
 
