@@ -1,11 +1,12 @@
 
 import random
 import itertools
+import functools
 import numpy as np
 import matplotlib.pyplot as plt
 import networkx as nx
 from scipy.stats import gamma
-from multiprocessing import Pool
+from multiprocessing import Pool, Process
 
 
 def chunk_generator(array, num_chunks, repeat=True):
@@ -25,7 +26,17 @@ def chunk_generator(array, num_chunks, repeat=True):
 			return
 
 
+def ffill(arr):
+	"""Forward fill an array."""
+	mask = np.isnan(arr)
+	idx = np.where(~mask, np.arange(mask.shape[1]), 0)
+	np.maximum.accumulate(idx, axis=1, out=idx)
+	out = arr[np.arange(idx.shape[0])[:,None], idx]
+	return out
+
+
 class InfectionRate:
+	# TODO: implement awareness.
 	def __init__(self, rate, stochastic=False):
 		self.rate = rate
 		self.stochastic = stochastic
@@ -57,10 +68,10 @@ class RecoveryRate:
 
 
 class TestingPool:
-	def __init__(self, tested_nodes, num_rounds=1, schedule=[True]):
+	def __init__(self, tested_nodes, rounds=1, schedule=[True]):
 
 		# Initialize a chunk / partition generator
-		self.tested_chunks = chunk_generator(tested_nodes, num_rounds)
+		self.tested_chunks = chunk_generator(tested_nodes, rounds)
 
 		# Default test schedule is everyday
 		# Assuming `t` == 1 is the first weekday (i.e. Monday)
@@ -121,7 +132,7 @@ def update_dynamics(G, infection_rate, recovery_rate, dt=1):
 	return G
 
 
-def update_tests(G, t, tested_nodes):
+def update_tests(G, t, tested_nodes, sensitivity=1., specificity=1.):
 	"""
 	Update tests (retest testing subjects).
 
@@ -129,7 +140,8 @@ def update_tests(G, t, tested_nodes):
 		G: graph of community.
 		t: current time.
 		tested_nodes: nodes from G to be tested.
-		resample: resample test subjects randomly every testing round.
+		sensitivity: true positives / (true positives + false negatives).
+		specificity: true negatives / (true negatives + false positives).
 
 	Returns:
 		Updated graph, and a flag whether a test subject was infected.
@@ -137,8 +149,16 @@ def update_tests(G, t, tested_nodes):
 
 	for test_node in tested_nodes:
 		G.nodes[test_node]["last_test"] = t
-		infectious = G.nodes[test_node]["state"] == "I"
-		G.nodes[test_node]["quarantined"] = infectious
+		if G.nodes[test_node]["state"] == "I":
+			# Patient is positive, true positive rate is sensitivity
+			test_positive = 1 == np.random.binomial(1, sensitivity)
+		else:
+			# Patient is negative, false positive rate is 1 - specificity
+			test_positive = 1 == np.random.binomial(1, 1 - specificity)
+		
+		# Add patient to quarantine if tested positive
+		# TODO: implement delay testing
+		G.nodes[test_node]["quarantined"] = test_positive
 
 	return G
 
@@ -180,9 +200,9 @@ def outbreak_simulation(G,
 					    initial_infected=1,
 					    infection_rate=InfectionRate(0.1, True),
 					    recovery_rate=RecoveryRate(5, 1/3),
-					    testing_capacity=0.01,
-					    testing_rounds=1,
-					    testing_interval=1,
+					    testing_capacity=0.1,
+					    testing_rounds=10,
+					    testing_schedule=[True],
 					    quarantine_length=14,
 					    report_interval=1000,
 					    stop_if_positive=False,):
@@ -199,7 +219,7 @@ def outbreak_simulation(G,
 		testing_capacity: max tests possible every `testing_interval`,
 		                  measured as a fraction of the whole population.
 		testing_rounds: how many rounds to divide the testing pool.
-		testing_interval: testing interval (in units of dt).
+		testing_schedule: a cyclical schedule where False means no testing.
 		quarantine_length: time should be spent in quarantine.
 		report_interval: reporting interval for SIR values (in dt).
 		stop_if_positive: stops simulation when a test subject gets infected.
@@ -217,7 +237,9 @@ def outbreak_simulation(G,
 	num_tested_nodes = round(testing_capacity * len(G.nodes))
 	tested_nodes = np.random.choice(G.nodes, num_tested_nodes)
 	# Create testing pool
-	testing_pool = TestingPool(tested_nodes, num_rounds=testing_rounds)
+	testing_pool = TestingPool(tested_nodes,
+							   rounds=testing_rounds,
+							   schedule=testing_schedule)
 
 
 	# Track the number of nodes in each compartment
@@ -256,10 +278,9 @@ def outbreak_simulation(G,
 		G = update_dynamics(G, infection_rate, recovery_rate, dt)
 		t += dt
 
-		# Retest every testing_interval
-		if round(t / dt) % testing_interval == 0:
-			testing_round = testing_pool.next_round()
-			G = update_tests(G, t, testing_round)
+		# Test next round of test subjects
+		testing_round = testing_pool.next_round()
+		G = update_tests(G, t, testing_round)
 
 		# Update state of network
 		G, SIR = update_state(G, SIR, t, quarantine_length)
@@ -273,70 +294,8 @@ def outbreak_simulation(G,
 	return tuple(zip(*SIR_record))
 
 
-def plot_infections(num_lines=10, max_t=30):
-	"""
-	Plot the average SIR curves of `num_lines` curves,
-	and show each infection curve on the plot too.
-
-	Args:
-		num_lines: number of simulations to average.
-		max_t: plot curves up to `max_t` days.
-	"""
-	N = 4000
-	G = nx.barabasi_albert_graph(N, 3)
-
-	Q = 400  # num of test subjects
-	testing_capacity = Q / N
-	testing_rounds = 10
-	testing_interval = 1
-
-	lines_shape = (num_lines, max_t+1)
-	S_lines = np.zeros(lines_shape)
-	I_lines = np.zeros(lines_shape)
-	R_lines = np.zeros(lines_shape)
-
-	for i in range(num_lines):
-		S, I, R = outbreak_simulation(G, testing_capacity=testing_capacity,
-										 testing_rounds=testing_rounds,
-										 testing_interval=testing_interval,)
-		S, I, R = np.array(S), np.array(I), np.array(R)
-		S_lines[i, :S.shape[0]] = S[:max_t+1]
-		I_lines[i, :I.shape[0]] = I[:max_t+1]
-		R_lines[i, :R.shape[0]] = R[:max_t+1]
-
-	fig = plt.figure()
-	S_mean = np.nanmean(np.array(S_lines), axis=0)
-	I_mean = np.nanmean(np.array(I_lines), axis=0)
-	R_mean = np.nanmean(np.array(R_lines), axis=0)
-
-	#plt.plot(S_mean, label="S", color=u'#1f77b4', linewidth=2)
-	plt.plot(I_mean, label="I", color=u'#ff7f0e', linewidth=2)
-	#plt.plot(R_mean, label="R", color=u'#2ca02c', linewidth=2)
-
-	for I in I_lines:
-		plt.plot(I, color=u'#ff7f0e', linewidth=0.5)
-
-	plt.legend()
-	plt.grid(which="major")
-	plt.xlim(0, max_t)
-	plt.show()
-	fig.savefig("SIR_curves.png")
-
-
-def main():
-	# Define network structure and outbreak configurations
-	population = 4000
-	G = nx.barabasi_albert_graph(population, 3)
-	outbreak_config = {
-		"testing_capacity": 400 / population,
-		"testing_rounds": 10,
-		"testing_interval": 1,
-		"quarantine_length": 14,
-	}
-	# Run the simulation
-	S, I, R = outbreak_simulation(G, **outbreak_config)
-
-	# Plot SIR curve
+def plot_SIR(S, I, R):
+	"""Create a simple plot of the SIR curve"""
 	plt.figure()
 	plt.plot(S, label="S")
 	plt.plot(I, label="I")
@@ -345,8 +304,116 @@ def main():
 	plt.show()
 
 
-if __name__ == '__main__':
+def plot_averaged_SIRs(SIRs, max_t=50, I_lines_only=True, I_mean_only=True):
+	"""
+	Plot SIR curves and their average.
+	and show each infection curve on the plot too.
+
+	Args:
+		SIRs: a list of SIR curves.
+		max_t: plot curves up to `max_t` days.
+		I_lines_only: whether to plot the lines of I or all of S, I, and R.
+		I_mean_only: whether to plot the mean of I or all of S, I, and R.
+	"""
+
+	S_color = u'#1f77b4'
+	I_color = u'#ff7f0e'
+	R_color = u'#2ca02c'
+
+	lines_shape = (len(SIRs), max_t+1)
+	S_lines = np.ones(lines_shape) * np.nan
+	I_lines = np.ones(lines_shape) * np.nan
+	R_lines = np.ones(lines_shape) * np.nan
+
+	# Create multi-array of all SIR curves up to max_t
+	for i, SIR in enumerate(SIRs):
+		S, I, R = SIR
+		S, I, R = np.array(S), np.array(I), np.array(R)
+		S_lines[i, :S.shape[0]] = S[:max_t+1]
+		I_lines[i, :I.shape[0]] = I[:max_t+1]
+		R_lines[i, :R.shape[0]] = R[:max_t+1]
+
+	# Forward fill final values from simulation
+	S_lines = ffill(S_lines)
+	I_lines = ffill(I_lines)
+	R_lines = ffill(R_lines)
+
+	# Plot the averages of S, I, and R curves
+	fig = plt.figure(figsize=(13, 8))
+	plt.plot(I_lines.mean(0), label="I", color=I_color, linewidth=3)
+	if not I_mean_only:
+		plt.plot(S_lines.mean(0), label="S", color=S_color, linewidth=3)
+		plt.plot(R_lines.mean(0), label="R", color=R_color, linewidth=3)
+
+	# Plot all I curves to visualize simulation runs
+	[plt.plot(I, color=I_color, linewidth=0.5) for I in I_lines]
+	if not I_lines_only:
+		[plt.plot(S, color=S_color, linewidth=0.5) for S in S_lines]
+		[plt.plot(R, color=R_color, linewidth=0.5) for R in R_lines]
+
+	# Configure plot, show, and save
+	plt.legend()
+	plt.grid(which="major")
+	plt.xlim(0, max_t)
+	plt.show()
+	fig.savefig("SIR.png")
+
+
+def repeat_simulation(sim_config={},
+					  num_sim=100,
+					  init_G=None,
+					  regenerate=False,
+					  processes=None):
+	"""
+	Repeats an outbreak simulation given its config.
+	Runs in parallel.
+
+	Args:
+		sim_config: config of the outbreak simulation.
+		num_sim: number of simulations to run.
+		init_G: a function that generates / initializes a graph.
+		regenerate: if True, regenerate the graph for every simulation.
+		processes: number of processes to run in parallel.
+
+	Return:
+		list of SIR curves for all simulations.
+	"""
+
+	# Define default graph initializer
+	if init_G is None:
+		init_G = lambda: nx.barabasi_albert_graph(4000, 3)
+	
+	# Define simulation task based on given config.
+	# This will return a function `sim(G)` that takes a graph as an arg.
+	sim = functools.partial(outbreak_simulation, **sim_config)
+
+	# Run simulations in parallel
+	with Pool(processes=processes) as pool:
+		if regenerate:
+			graphs = [init_G() for _ in range(num_sim)]
+		else:
+			G = init_G()
+			graphs = [G] * num_sim
+		SIRs = pool.map(sim, graphs)
+
+	return SIRs
+
+
+def simulation_example():
+	G = nx.barabasi_albert_graph(4000, 3)
+	plot_SIR(*outbreak_simulation(G))
+
+
+def repeat_simulation_example():
+	plot_averaged_SIRs(repeat_simulation())
+
+
+def main():
 	random.seed(123)
 	np.random.seed(123)
-	plot_infections()
+	repeat_simulation_example()
+
+
+if __name__ == '__main__':
+	main()
 
