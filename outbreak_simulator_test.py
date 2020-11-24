@@ -187,11 +187,11 @@ def test_threshold(G=nx.barabasi_albert_graph(4000, 3), MFL=True, QMF=True):
 		simulate(qmf_threshold*2)
 
 
-def test_repeat_simulation():
-	print("=== Running 100 simulations in parallel ===")
+def test_repeat_simulation(num_sim=100):
+	print(f"=== Running {num_sim} simulations in parallel ===")
 	figname = os.path.join(TEST_DIR, "SIRs.png")
-	plot_averaged_SIRs(repeat_simulation(parallel=0, num_sim=200),
-					   figname=figname, show_plot=False)
+	SIRs = repeat_simulation(parallel=0, num_sim=num_sim)
+	plot_averaged_SIRs(SIRs, figname=figname, show_plot=False)
 	print("Done.")
 
 
