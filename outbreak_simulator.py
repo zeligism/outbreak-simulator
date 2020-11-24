@@ -381,6 +381,7 @@ def plot_averaged_SIRs(SIRs,
 	# Configure plot, show, and save
 	plt.legend()
 	plt.grid(which="major")
+	plt.title(f"SIR Curves of {len(SIRs)} Simulations")
 	#plt.xlim(0, max_t)
 	if show_plot:
 		plt.show()
@@ -412,8 +413,8 @@ def repeat_simulation(G=nx.barabasi_albert_graph(4000, 3),
 	sim = functools.partial(outbreak_simulation, **sim_config)
 
 	# Run simulations in parallel
-	if parallel is None:
-		SIRs = [sim(G) for _ in range(num_sim)]  # XXX
+	if parallel is None or num_sim <= 10:
+		SIRs = [sim(G) for _ in range(num_sim)]
 	else:
 		processes = parallel if parallel > 0 else None
 		with Pool(processes=processes) as pool:

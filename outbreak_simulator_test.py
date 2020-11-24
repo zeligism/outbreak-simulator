@@ -1,10 +1,12 @@
 
+import os
 import random
 import numpy as np
 import matplotlib.pyplot as plt
 import networkx as nx
 from outbreak_simulator import *
 
+TEST_DIR = "test"
 
 def simulate_transition_time(rates, num_people=10000):
 	transition_times = np.zeros(num_people) + np.nan
@@ -22,8 +24,9 @@ def simulate_transition_time(rates, num_people=10000):
 
 def test_infection_rate(rate=0.1, max_t=40):
 	print("=== Testing infection rate ===")
-	const_infection_rate = InfectionRate(rate=rate)
-	gamma_infection_rate = InfectionRate(rate=rate, stochastic=True)
+	const_infection_rate = InfectionRate(infection_rate=rate)
+	gamma_infection_rate = InfectionRate(infection_rate=rate,
+										 use_gamma_rate=True)
 
 	const_rates = [const_infection_rate(t) for t in range(max_t+1)]
 	gamma_rates = [gamma_infection_rate(t) for t in range(max_t+1)]
@@ -38,17 +41,17 @@ def test_infection_rate(rate=0.1, max_t=40):
 	gamma_mass_lt_14 = sum(gamma_rates[:15]) * (0.118 / rate)
 	print("Gamma infection rate's mass <= 14 days:", gamma_mass_lt_14)
 
-	plt.figure()
+	fig = plt.figure()
 	plt.plot(const_rates, label="Constant")
 	plt.plot(gamma_rates, label="Gamma")
 	plt.title("Infection rates")
 	plt.legend()
-	plt.show()
+	fig.savefig(os.path.join(TEST_DIR, "infection_rates.png"))
 
 	const_infection_times = simulate_transition_time(const_rates)
 	gamma_infection_times = simulate_transition_time(gamma_rates)
 
-	plt.figure()
+	fig = plt.figure()
 	bins = int(max(const_infection_times) - min(const_infection_times))
 	plt.hist(const_infection_times, bins=bins, rwidth=0.7, label="Constant")
 	bins = int(max(gamma_infection_times) - min(gamma_infection_times))
@@ -57,7 +60,7 @@ def test_infection_rate(rate=0.1, max_t=40):
 	plt.xlabel("Infection time")
 	plt.ylabel("Number of infected")
 	plt.legend()
-	plt.show()
+	fig.savefig(os.path.join(TEST_DIR, "infection_times.png"))
 
 
 def test_recovery_rate(recovery_time=14, max_t=40):
@@ -70,12 +73,12 @@ def test_recovery_rate(recovery_time=14, max_t=40):
 	normal_rates = [normal_recovery_rate(t) for t in range(max_t+1)]
 	decay_rates = [decay_recovery_rate(t) for t in range(max_t+1)]
 
-	plt.figure()
+	fig = plt.figure()
 	plt.plot(normal_rates, label="Normal")
 	plt.plot(decay_rates, label="Decay")
 	plt.title("Recovery rates")
 	plt.legend()
-	plt.show()
+	fig.savefig(os.path.join(TEST_DIR, "recovery_rates.png"))
 
 	normal_recovery_times = simulate_transition_time(normal_rates)
 	decay_recovery_times = simulate_transition_time(decay_rates)
@@ -85,7 +88,7 @@ def test_recovery_rate(recovery_time=14, max_t=40):
 	all_recovered_gt_14 = all(t >= recovery_time for t in decay_recovery_times)
 	print(f"All decay recovery times are >= {recovery_time} days:", all_recovered_gt_14)
 
-	plt.figure()
+	fig = plt.figure()
 	bins = int(max(decay_recovery_times) - min(decay_recovery_times))
 	plt.hist(normal_recovery_times, bins=bins, label="Normal")
 	plt.hist(decay_recovery_times, bins=bins, rwidth=0.5, label="Decay")
@@ -93,7 +96,7 @@ def test_recovery_rate(recovery_time=14, max_t=40):
 	plt.xlabel("Recovery time")
 	plt.ylabel("Number of recovered")
 	plt.legend()
-	plt.show()
+	fig.savefig(os.path.join(TEST_DIR, "recovery_times.png"))
 
 
 def test_testing_pool(pool_size=17):
@@ -153,8 +156,8 @@ def test_threshold(G=nx.barabasi_albert_graph(4000, 3), MFL=True, QMF=True):
 		# Run simulations
 		SIRs = repeat_simulation(G=G, sim_config=sim_config, num_sim=num_sim)
 		figname = f"SIRs(beta={beta:.4f},gamma={gamma:.4f}).png"
-		plot_averaged_SIRs(SIRs, means_to_plot="IR",
-						   figname=figname, show_plot=False)
+		figname = os.path.join(TEST_DIR, figname)
+		plot_averaged_SIRs(SIRs, means_to_plot="IR", figname=figname, show_plot=False)
 
 	if MFL:
 		print("=== Mean-Field Like Threshold ===")
@@ -174,34 +177,33 @@ def test_threshold(G=nx.barabasi_albert_graph(4000, 3), MFL=True, QMF=True):
 		print("=== Quenched Mean-Field Threshold ===")
 		# Calculate quenched mean field (QMF) epidemic threshold
 		L = nx.normalized_laplacian_matrix(G)
-		qmf_threshold = 1 / max(np.linalg.eigvals(L.A))  # from networkx docs
+		eigvals = np.linalg.eigvals(L.A)  # from networkx docs
+		qmf_threshold = 1 / max(map(abs, eigvals))
 		qmf_threshold = np.real(qmf_threshold)  # to avoid complex fractions
 
 		print("Simulating with beta == gamma * threshold")
 		simulate(qmf_threshold)
 		print("Simulating with beta == 2 * gamma * threshold")
 		simulate(qmf_threshold*2)
-		print("Simulating with beta == 3 * gamma * threshold")
-		simulate(qmf_threshold*3)
 
 
-def simulation_example():
-	plot_SIR(*outbreak_simulation(nx.barabasi_albert_graph(4000, 3)))
-
-
-def repeat_simulation_example():
-	plot_averaged_SIRs(repeat_simulation(), figname="SIRs_example.png")
+def test_repeat_simulation():
+	print("=== Running 100 simulations in parallel ===")
+	figname = os.path.join(TEST_DIR, "SIRs.png")
+	plot_averaged_SIRs(repeat_simulation(parallel=0, num_sim=200),
+					   figname=figname, show_plot=False)
+	print("Done.")
 
 
 def main():
 	random.seed(123)
 	np.random.seed(123)
+	if not os.path.isdir(TEST_DIR): os.mkdir(TEST_DIR)
 	test_infection_rate()
 	test_recovery_rate()
 	test_testing_pool()
-	test_threshold()
-	simulation_example()
-	repeat_simulation_example()
+	test_threshold(MFL=True, QMF=False)
+	test_repeat_simulation()
 
 
 if __name__ == '__main__':
