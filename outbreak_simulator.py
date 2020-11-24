@@ -1,4 +1,5 @@
 
+import argparse
 import random
 import itertools
 import functools
@@ -37,34 +38,41 @@ def ffill(arr):
 
 class InfectionRate:
 	# TODO: implement awareness.
-	def __init__(self, rate, stochastic=False):
-		self.rate = rate
-		self.stochastic = stochastic
+	def __init__(self, infection_rate, use_gamma_rate=False):
+		self.infection_rate = infection_rate
+		self.use_gamma_rate = use_gamma_rate
 
 		# Use gamma distribution for infection rate
 		gamma_pdf = lambda t: gamma.pdf(t, a=2.25, scale=2.8)
 		# Store values up to 50 days (unlikely to go past that)
-		gamma_cache = [gamma_pdf(t) for t in range(50)]
+		gamma_cache = [gamma_pdf(t) for t in range(51)]
 		# Renormalize s.t. peak == rate
-		c = self.rate / max(gamma_cache)
+		c = self.infection_rate / max(gamma_cache)
 		gamma_cache = [c * g for g in gamma_cache]
 
 		self.gamma = gamma_cache
 
 	def __call__(self, duration=None):
-		return self.gamma[duration] if self.stochastic else self.rate
+		if self.use_gamma_rate:
+			return self.gamma[duration]
+		else:
+			return self.infection_rate
 
 
 class RecoveryRate:
-	def __init__(self, recovery_time=14, post_recovery_rate=1):
+	"""
+	Patient has to spend `recovery_time` days first and then they
+	will heal at a rate of `recovery_rate`.
+	"""
+	def __init__(self, recovery_time=14, recovery_rate=1):
 		self.recovery_time = recovery_time
-		self.post_recovery_rate = post_recovery_rate
+		self.recovery_rate = recovery_rate
 
 	def __call__(self, duration=None):
 		if duration < self.recovery_time:
 			return 1e-10  # effectively 0, just to avoid ZeroDivisionError
 		else:
-			return self.post_recovery_rate
+			return self.recovery_rate
 
 
 class TestingPool:
@@ -78,7 +86,7 @@ class TestingPool:
 		# Example of a schedule where we test everyday except weekends:
 		#     [True, True, True, True, True, False, False]
 		self.t = 1
-		self.schedule = schedule
+		self.schedule = schedule if len(schedule) > 0 else [True]
 
 	def next_round(self):
 		"""
@@ -189,23 +197,27 @@ def update_state(G, SIR, t, quarantine_length):
 
 		# Check and update quarantine state
 		if node_data["quarantined"]:
-			quaran_time = t - node_data["last_test"]
-			node_data["quarantined"] = quaran_time < quarantine_length
+			exceeded_time = (t - node_data["last_test"]) >= quarantine_length
+			infectious = node_data["state"] == "I"
+			# XXX: release quarantined subjects only when recovered?
+			node_data["quarantined"] = not (exceeded_time and not infectious)
 
 	return G, SIR
 
 
 def outbreak_simulation(G,
-					    dt=1,
-					    initial_infected=1,
-					    infection_rate=InfectionRate(0.1, True),
-					    recovery_rate=RecoveryRate(5, 1/3),
-					    testing_capacity=0.1,
-					    testing_rounds=10,
-					    testing_schedule=[True],
-					    quarantine_length=14,
-					    report_interval=1000,
-					    stop_if_positive=False,):
+						dt=1,
+						initial_infected=1,
+						infection_rate=InfectionRate(0.1, False),
+						recovery_rate=RecoveryRate(5, 1/3),
+						testing_capacity=0.1,
+						testing_rounds=10,
+						testing_schedule=[True],
+						test_sensitivity=1.0,
+						test_specificity=1.0,
+						quarantine_length=14,
+						report_interval=1000,
+						stop_if_positive=False,):
 	"""
 	Simulates the spread of an infectious disease in a community modeled
 	by the graph G.
@@ -217,9 +229,11 @@ def outbreak_simulation(G,
 		infection_rate: infection rate (in units of 1/dt).
 		recovery_rate: recovery/removal rate (I -> R rate).
 		testing_capacity: max tests possible every `testing_interval`,
-		                  measured as a fraction of the whole population.
+						  measured as a fraction of the whole population.
 		testing_rounds: how many rounds to divide the testing pool.
 		testing_schedule: a cyclical schedule where False means no testing.
+		test_sensitivity: test sensitivity.
+		test_specificity: test specificity.
 		quarantine_length: time should be spent in quarantine.
 		report_interval: reporting interval for SIR values (in dt).
 		stop_if_positive: stops simulation when a test subject gets infected.
@@ -279,8 +293,9 @@ def outbreak_simulation(G,
 		t += dt
 
 		# Test next round of test subjects
-		testing_round = testing_pool.next_round()
-		G = update_tests(G, t, testing_round)
+		G = update_tests(G, t, testing_pool.next_round(),
+						 sensitivity=test_sensitivity,
+						 specificity=test_specificity)
 
 		# Update state of network
 		G, SIR = update_state(G, SIR, t, quarantine_length)
@@ -304,26 +319,35 @@ def plot_SIR(S, I, R):
 	plt.show()
 
 
-def plot_averaged_SIRs(SIRs, max_t=50, I_lines_only=True, I_mean_only=True):
+def plot_averaged_SIRs(SIRs,
+					   max_t="auto",
+					   lines_to_plot="IR",
+					   means_to_plot="SIR",
+					   figname="SIRs.png",
+					   show_plot=False):
 	"""
 	Plot SIR curves and their average.
 	and show each infection curve on the plot too.
 
 	Args:
 		SIRs: a list of SIR curves.
-		max_t: plot curves up to `max_t` days.
-		I_lines_only: whether to plot the lines of I or all of S, I, and R.
-		I_mean_only: whether to plot the mean of I or all of S, I, and R.
+		max_t: plot up to `max_t` days, set to 'auto' to auto-detect max.
+		lines_to_plot: plot the lines of all sims for each comp. in `lines`.
+		means_to_plot: plot the mean of all sims for each comp. in `means`.
+		figname: name of figure to save, None if no need to save fig.
+		show_plot: show plot if True.
 	"""
 
-	S_color = u'#1f77b4'
-	I_color = u'#ff7f0e'
-	R_color = u'#2ca02c'
+	compartments = ("S", "I", "R")
+	colors = {"S": u'#1f77b4', "I": u'#ff7f0e', "R": u'#2ca02c'}
+
+	if max_t == "auto":
+		max_t = max(len(line) for SIR in SIRs for line in SIR)
 
 	lines_shape = (len(SIRs), max_t+1)
-	S_lines = np.ones(lines_shape) * np.nan
-	I_lines = np.ones(lines_shape) * np.nan
-	R_lines = np.ones(lines_shape) * np.nan
+	S_lines = np.zeros(lines_shape) + np.nan
+	I_lines = np.zeros(lines_shape) + np.nan
+	R_lines = np.zeros(lines_shape) + np.nan
 
 	# Create multi-array of all SIR curves up to max_t
 	for i, SIR in enumerate(SIRs):
@@ -338,31 +362,36 @@ def plot_averaged_SIRs(SIRs, max_t=50, I_lines_only=True, I_mean_only=True):
 	I_lines = ffill(I_lines)
 	R_lines = ffill(R_lines)
 
+	# Pack lines in a dict
+	lines = {"S": S_lines, "I": I_lines, "R": R_lines}
+
 	# Plot the averages of S, I, and R curves
 	fig = plt.figure(figsize=(13, 8))
-	plt.plot(I_lines.mean(0), label="I", color=I_color, linewidth=3)
-	if not I_mean_only:
-		plt.plot(S_lines.mean(0), label="S", color=S_color, linewidth=3)
-		plt.plot(R_lines.mean(0), label="R", color=R_color, linewidth=3)
+	for comp in compartments:
+		if comp in means_to_plot:
+			plt.plot(lines[comp].mean(0),
+					 label=comp, color=colors[comp], linewidth=3)
 
 	# Plot all I curves to visualize simulation runs
-	[plt.plot(I, color=I_color, linewidth=0.5) for I in I_lines]
-	if not I_lines_only:
-		[plt.plot(S, color=S_color, linewidth=0.5) for S in S_lines]
-		[plt.plot(R, color=R_color, linewidth=0.5) for R in R_lines]
+	for comp in compartments:
+		if comp in lines_to_plot:
+			for comp_line in lines[comp]:
+				plt.plot(comp_line, color=colors[comp], linewidth=0.5)
 
 	# Configure plot, show, and save
 	plt.legend()
 	plt.grid(which="major")
-	plt.xlim(0, max_t)
-	plt.show()
-	fig.savefig("SIR.png")
+	#plt.xlim(0, max_t)
+	if show_plot:
+		plt.show()
+	if figname is not None:
+		fig.savefig(figname)
 
 
-def repeat_simulation(sim_config={},
+def repeat_simulation(G=nx.barabasi_albert_graph(4000, 3),
+					  sim_config={},
 					  num_sim=100,
-					  init_G=None,
-					  regenerate=False,
+					  regenerate_graph=False,
 					  processes=None):
 	"""
 	Repeats an outbreak simulation given its config.
@@ -371,17 +400,12 @@ def repeat_simulation(sim_config={},
 	Args:
 		sim_config: config of the outbreak simulation.
 		num_sim: number of simulations to run.
-		init_G: a function that generates / initializes a graph.
-		regenerate: if True, regenerate the graph for every simulation.
+		G: can be a graph or a callable that generates a graph.
 		processes: number of processes to run in parallel.
 
 	Return:
 		list of SIR curves for all simulations.
 	"""
-
-	# Define default graph initializer
-	if init_G is None:
-		init_G = lambda: nx.barabasi_albert_graph(4000, 3)
 	
 	# Define simulation task based on given config.
 	# This will return a function `sim(G)` that takes a graph as an arg.
@@ -389,29 +413,19 @@ def repeat_simulation(sim_config={},
 
 	# Run simulations in parallel
 	with Pool(processes=processes) as pool:
-		if regenerate:
-			graphs = [init_G() for _ in range(num_sim)]
+		if callable(G):
+			graphs = [G() for _ in range(num_sim)]
 		else:
-			G = init_G()
-			graphs = [G] * num_sim
+			graphs = [G.copy() for _ in range(num_sim)]
 		SIRs = pool.map(sim, graphs)
 
 	return SIRs
 
 
-def simulation_example():
-	G = nx.barabasi_albert_graph(4000, 3)
-	plot_SIR(*outbreak_simulation(G))
-
-
-def repeat_simulation_example():
-	plot_averaged_SIRs(repeat_simulation())
-
-
 def main():
 	random.seed(123)
 	np.random.seed(123)
-	repeat_simulation_example()
+	plot_averaged_SIRs(repeat_simulation(), figname=None, show_plot=True)
 
 
 if __name__ == '__main__':
