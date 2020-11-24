@@ -54,8 +54,8 @@ def parse_args():
 		help="Which compartment means to plot")
 	parser.add_argument("--figname", type=str, default=None,
 		help="Name of figure to save")
-	parser.add_argument("--processes", type=int, default=None,
-		help="Number of processes to run")
+	parser.add_argument("--parallel", type=int, nargs="?", default=None, const=0,
+		help="Number of processes to run in parallel (# of CPUs if no args given)")
 	parser.add_argument("--show_plot", action="store_true",
 		help="Whether to show plot or not")
 
@@ -99,7 +99,7 @@ def main(args):
 	SIRs = repeat_simulation(G=G,
 							 sim_config=sim_config,
 							 num_sim=args.num_sim,
-							 processes=args.processes,)
+							 parallel=args.parallel,)
 
 	plot_averaged_SIRs(SIRs,
 					   lines_to_plot=args.lines_to_plot,

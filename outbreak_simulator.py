@@ -1,5 +1,5 @@
 
-import argparse
+import os
 import random
 import itertools
 import functools
@@ -392,16 +392,16 @@ def repeat_simulation(G=nx.barabasi_albert_graph(4000, 3),
 					  sim_config={},
 					  num_sim=100,
 					  regenerate_graph=False,
-					  processes=None):
+					  parallel=None):
 	"""
 	Repeats an outbreak simulation given its config.
-	Runs in parallel.
 
 	Args:
 		sim_config: config of the outbreak simulation.
 		num_sim: number of simulations to run.
 		G: can be a graph or a callable that generates a graph.
-		processes: number of processes to run in parallel.
+		parallel: number of processes to run in parallel (# of CPUs if 0).
+				   Doesn't run in parallel if None.
 
 	Return:
 		list of SIR curves for all simulations.
@@ -412,12 +412,17 @@ def repeat_simulation(G=nx.barabasi_albert_graph(4000, 3),
 	sim = functools.partial(outbreak_simulation, **sim_config)
 
 	# Run simulations in parallel
-	with Pool(processes=processes) as pool:
-		if callable(G):
-			graphs = [G() for _ in range(num_sim)]
-		else:
-			graphs = [G.copy() for _ in range(num_sim)]
-		SIRs = pool.map(sim, graphs)
+	if parallel is None:
+		SIRs = [sim(G) for _ in range(num_sim)]  # XXX
+	else:
+		processes = parallel if parallel > 0 else None
+		with Pool(processes=processes) as pool:
+			if callable(G):
+				graphs = [G() for _ in range(num_sim)]
+			else:
+				graphs = [G.copy() for _ in range(num_sim)]
+			SIRs = pool.map(sim, graphs)
+
 
 	return SIRs
 
