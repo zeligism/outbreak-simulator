@@ -30,7 +30,7 @@ for infection_rate in "${INFECTION_RATE[@]}"; do
         command+=" --quarantine_length $quarantine_length"
         command+=" --num_sim 100"
         command+=" --figname plots/${figname}.png"
-        #command+=" --parallel"
+        command+=" --parallel"
         echo "$command" >> "$ja_file"
       done
     done
