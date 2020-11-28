@@ -1,0 +1,34 @@
+#!/bin/bash
+#SBATCH --job-name=outbreak-simulation
+#SBATCH --time=0:05:00
+#SBATCH --cpus-per-task=24
+
+source activate graph
+
+NUM_SIM=${NUM_SIM:-100}
+POPULATION=${POPULATION:-4000}
+INFECTION_RATE=${INFECTION_RATE:-0.1}
+RECOVERY_TIME=${RECOVERY_TIME:-14}
+RECOVERY_RATE=${RECOVERY_RATE:-1}
+QUARANTINE_LENGTH=${QUARANTINE_LENGTH:-0}
+TESTING_CAPACITY=${TESTING_CAPACITY:-0.01}
+TESTING_ROUNDS=${TESTING_ROUNDS:-1}
+ZEROS=""
+if (( TESTING_INTERVAL > 1 )); then
+  ZEROS=$(printf ' 0%.0s' $(seq $((TESTING_INTERVAL-1))))
+fi
+TESTING_SCHEDULE=${TESTING_SCHEDULE:-1${ZEROS}}
+FIGNAME="${FIGNAME:-SIR_b${INFECTION_RATE}_q${QUARANTINE_LENGTH}.png}"
+
+python run.py \
+       --num_sim $NUM_SIM \
+       --population $POPULATION \
+       --infection_rate $INFECTION_RATE \
+       --recovery_time $RECOVERY_TIME \
+       --recovery_rate $RECOVERY_RATE \
+       --quarantine_length $QUARANTINE_LENGTH \
+       --testing_capacity $TESTING_CAPACITY \
+       --testing_rounds $TESTING_ROUNDS \
+       --testing_schedule "$TESTING_SCHEDULE" \
+       --figname "$FIGNAME"
+              
