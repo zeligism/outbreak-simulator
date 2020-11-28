@@ -24,7 +24,7 @@ for infection_rate in "${INFECTION_RATE[@]}"; do
         command+=" --gamma_infection"
         command+=" --recovery_time 14"
         command+=" --recovery_rate 0.3333"
-        command+=" --testing_capacity $testing_rounds"
+        command+=" --testing_capacity $testing_capacity"
         command+=" --testing_rounds $testing_rounds"
         command+=" --testing_schedule 1 1 1 1 1 0 0"
         command+=" --quarantine_length $quarantine_length"
