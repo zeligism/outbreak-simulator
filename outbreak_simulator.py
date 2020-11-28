@@ -173,7 +173,8 @@ def test_state(node_state, sensitivity=1., specificity=1.,):
 def update_tests(G, t, tested_nodes,
 				 quarantine_length=14,
 	             test_sensitivity=1.,
-	             test_specificity=1.,):
+	             test_specificity=1.,
+	             delay=0):
 	"""
 	Update tests (retest testing subjects).
 
@@ -184,26 +185,29 @@ def update_tests(G, t, tested_nodes,
 		quarantine_length: time length of quarantine.
 		test_sensitivity: test sensitivity.
 		test_specificity: test specificity.
+		delay: delay of test result (0 for immediate test result). TODO
 
 	Returns:
 		Updated graph.
 	"""
 
+	# If quarantine length is 0 or less, then testing is useless
+	if quarantine_length <= 0:
+		return G
+
 	for tested_node in tested_nodes:
-		# Skip if already recovered
+		# Skip if already recovered XXX: why?
 		if G.nodes[tested_node]["state"] == "R":
-			continue
-		# Skip if already in quarantine
+			pass #continue
+		# Skip if still in quarantine
 		if G.nodes[tested_node]["quarantine_rem"] >= 0:
 			continue
 
 		# Test node and record test time
 		positive = test_state(G.nodes[tested_node]["state"],
 							  test_sensitivity, test_specificity)
-		G.nodes[tested_node]["test_t"] = t
 
 		# Add patient to quarantine if tested positive
-		# TODO: implement delay testing (if t - test_t == delay)
 		if positive and quarantine_length > 0:
 			logger.debug(f"[{t}] Quarantining positive node #{tested_node}")
 			G.nodes[tested_node]["quarantine_rem"] = quarantine_length
@@ -297,10 +301,10 @@ def outbreak_simulation(G,
 	t = 0
 
 	# Infect some nodes randomly from population
-	infected_nodes = np.random.choice(G.nodes, initial_infected)
+	infected_nodes = np.random.choice(G.nodes, initial_infected, replace=False)
 	# Sample test subjects from population
 	num_tested_nodes = round(testing_capacity * len(G.nodes))
-	tested_nodes = np.random.choice(G.nodes, num_tested_nodes)
+	tested_nodes = np.random.choice(G.nodes, num_tested_nodes, replace=False)
 	# Create testing pool
 	testing_pool = TestingPool(tested_nodes,
 							   rounds=testing_rounds,
@@ -315,16 +319,14 @@ def outbreak_simulation(G,
 	}
 
 	# Initialize default attributes of nodes (i.e. people):
-	# - state: the node's state at `t`
-	# - next_state: the node's state at `t+dt`, None if not changed
-	# - duration: the amount of time the node spent in the current state
-	# - test_t: the time of the last test, if any
-	# - quarantine_rem: remaining time of quarantine (< 0 means not quarantined)
+	# - state: node's state at `t`
+	# - next_state: node's state at `t+dt`, None if not changed
+	# - duration: amount of time the node spent in the current state
+	# - quarantine_rem: remaining time of quarantine (< 0 means not in qrtn)
 	for _, node_data in G.nodes(data=True):
 		node_data["state"] = "S"
 		node_data["next_state"] =  None
 		node_data["duration"] =  0
-		node_data["test_t"] = None
 		node_data["quarantine_rem"] =  -1
 	for infected_node in infected_nodes:
 		# Correct state of infected nodes
