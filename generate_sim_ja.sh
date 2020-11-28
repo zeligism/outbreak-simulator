@@ -15,7 +15,7 @@ for infection_rate in $(seq 0.025 0.025 0.1); do
     command+=" --testing_schedule 1 1 1 1 1 0 0"
     command+=" --quarantine_length $quarantine_length"
     command+=" --num_sim 100"
-    command+=" --figname plots/SIRs(b=${infection_rate}, qlen=${quarantine_length}).png"
+    command+=" --figname plots/SIRs_b=${infection_rate},qlen=${quarantine_length}.png"
     #command+=" --parallel"
     echo "$command" >> "$ja_file"
   done
