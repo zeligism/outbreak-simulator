@@ -23,7 +23,7 @@ def parse_args():
 		help="Number of individuals initially infected")
 	parser.add_argument("--infection_rate", type=float, default=0.05,
 		help="The daily probability of infecting a neighbor")
-	parser.add_argument("--use_gamma_rate", action="store_true",
+	parser.add_argument("--gamma_infection", action="store_true",
 		help="Use an infection rate that follows a gamma distribution-like curve")
 	parser.add_argument("--recovery_time", type=int, default=14,
 		help="Minimum time to recover")
@@ -79,7 +79,7 @@ def main(args):
 		NotImplementedError(f"Graph type {args.graph_type} not implemented")
 
 	# Initialize simulation configurations
-	infection_rate = InfectionRate(args.infection_rate, args.use_gamma_rate)
+	infection_rate = InfectionRate(args.infection_rate, args.gamma_infection)
 	recovery_rate = RecoveryRate(args.recovery_time, args.recovery_rate)
 	testing_schedule = tuple(map(bool, args.testing_schedule))
 	sim_config = {
