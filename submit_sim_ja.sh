@@ -2,4 +2,4 @@
 source activate graph
 mkdir -p plots
 # This uses a utility script provided by Dalma HPC
-slurm_parallel_ja_submit.sh -t 00:20:00 sim.ja
+slurm_parallel_ja_submit.sh -t 00:30:00 sim.ja
