@@ -1,5 +1,6 @@
 
 import os
+import pickle
 import logging
 import random
 import itertools
@@ -383,7 +384,9 @@ def plot_averaged_SIRs(SIRs,
 					   lines_to_plot="IR",
 					   means_to_plot="SIR",
 					   figname="SIRs.png",
-					   show_plot=False):
+					   figtitle=None,
+					   show_plot=False,
+					   save_data=False):
 	"""
 	Plot SIR curves and their average.
 	and show each infection curve on the plot too.
@@ -394,7 +397,9 @@ def plot_averaged_SIRs(SIRs,
 		lines_to_plot: plot the lines of all sims for each comp. in `lines`.
 		means_to_plot: plot the mean of all sims for each comp. in `means`.
 		figname: name of figure to save, None if no need to save fig.
+		figtitle: title of figure, None if using default title.
 		show_plot: show plot if True.
+		save_data: saves the data of the SIR lines of all simulation.
 	"""
 
 	compartments = ("S", "I", "R")
@@ -422,30 +427,44 @@ def plot_averaged_SIRs(SIRs,
 	R_lines = ffill(R_lines)
 
 	# Pack lines in a dict
-	lines = {"S": S_lines, "I": I_lines, "R": R_lines}
+	SIR_lines = {"S": S_lines, "I": I_lines, "R": R_lines}
 
 	# Plot the averages of S, I, and R curves
 	fig = plt.figure(figsize=(13, 8))
 	for comp in compartments:
 		if comp in means_to_plot:
-			plt.plot(lines[comp].mean(0),
+			plt.plot(SIR_lines[comp].mean(0),
 					 label=comp, color=colors[comp], linewidth=3)
 
 	# Plot all I curves to visualize simulation runs
 	for comp in compartments:
 		if comp in lines_to_plot:
-			for comp_line in lines[comp]:
+			for comp_line in SIR_lines[comp]:
 				plt.plot(comp_line, color=colors[comp], linewidth=0.5)
 
 	# Configure plot, show, and save
 	plt.legend()
 	plt.grid(which="major")
-	plt.title(f"SIR Curves of {len(SIRs)} Simulations")
-	#plt.xlim(0, max_t)
+	if figtitle is None:
+		plt.title(f"SIR Curves of {len(SIRs)} Simulations")
+	else:
+		plt.title(figtitle)
 	if show_plot:
 		plt.show()
 	if figname is not None:
 		fig.savefig(figname)
+
+	# Save data
+	if save_data:
+		# Choose appropriate name, matching with figname if possible
+		if figname is None:
+			fname = "SIR_data.pkl"
+		else:
+			basename = figname.split(".")[0] or "SIR_data"
+			fname = basename + ".pkl"
+		# Pickle data
+		with open(fname, "wb") as f:
+			pickle.dump(SIR_lines, f)
 
 
 def repeat_simulation(G=nx.barabasi_albert_graph(4000, 3),

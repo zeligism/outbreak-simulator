@@ -48,16 +48,21 @@ def parse_args():
 
 	parser.add_argument("--num_sim", type=int, default=10,
 		help="Number of simulations run")
+	parser.add_argument("--parallel", type=int, nargs="?", default=None, const=0,
+		help="Number of processes to run in parallel (# of CPUs if no args given)")
+
 	parser.add_argument("--lines_to_plot", type=str, default="IR",
 		help="Which compartment lines to plot")
 	parser.add_argument("--means_to_plot", type=str, default="SIR",
 		help="Which compartment means to plot")
 	parser.add_argument("--figname", type=str, default=None,
 		help="Name of figure to save")
-	parser.add_argument("--parallel", type=int, nargs="?", default=None, const=0,
-		help="Number of processes to run in parallel (# of CPUs if no args given)")
+	parser.add_argument("--figtitle", type=str, default=None,
+		help="Title of figure")
 	parser.add_argument("--show_plot", action="store_true",
-		help="Whether to show plot or not")
+		help="Show plot")
+	parser.add_argument("--save_data", action="store_true",
+		help="Save data of all SIR values for all simulations")
 
 	# Parse arguments
 	args = parser.parse_args()
@@ -75,6 +80,9 @@ def main(args):
 	# Initialize graph of community
 	if args.graph_type == "barabasi_albert":
 		G = nx.barabasi_albert_graph(args.population, 3)
+	elif args.graph_type == "erdos_renyi":
+		#G = nx.erdos_renyi_graph(args.population, 0.0025)
+		G = nx.fast_gnp_random_graph(args.population, 0.0025)
 	else:
 		NotImplementedError(f"Graph type {args.graph_type} not implemented")
 
@@ -105,7 +113,9 @@ def main(args):
 					   lines_to_plot=args.lines_to_plot,
 					   means_to_plot=args.means_to_plot,
 					   figname=args.figname,
-					   show_plot=args.show_plot)
+					   figtitle=args.figtitle,
+					   show_plot=args.show_plot,
+					   save_data=args.save_data)
 
 
 if __name__ == '__main__':
