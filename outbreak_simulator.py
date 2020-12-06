@@ -12,7 +12,7 @@ from scipy.stats import gamma
 from multiprocessing import Pool, Process
 
 FORMAT = "%(name)s.%(process)d.%(levelname)s %(message)s"
-logging.basicConfig(filename="sim.log", filemode="w", level=logging.DEBUG, format=FORMAT)
+logging.basicConfig(filename="sim.log", filemode="a", level=logging.DEBUG, format=FORMAT)
 logger = logging.getLogger(__name__)
 
 
@@ -235,7 +235,7 @@ def update_state(G, SIR, t,
 	Returns:
 		Updated graph and new compartment sizes.
 	"""
-	for _, node_data in G.nodes(data=True):
+	for node, node_data in G.nodes(data=True):
 		# Check quarantine state
 		if node_data["quarantine_rem"] > 0:
 			node_data["quarantine_rem"] -= 1
@@ -246,14 +246,19 @@ def update_state(G, SIR, t,
 			# Increase quarantine by 1 week if still positive
 			if positive:
 				node_data["quarantine_rem"] = 7  # XXX: hardcoded values
+				logger.debug(f"[{t}] Node #{node} extends quarantine")
 			else:
 				node_data["quarantine_rem"] = -1  # not quarantined
+				logger.debug(f"[{t}] Node #{node} exits quarantine")
 
 		if node_data["next_state"] is not None:
 			# Update compartment sizes
 			SIR[node_data["state"]] -= 1
 			SIR[node_data["next_state"]] += 1
 			# Update state and reset state dynamics
+			dynamics = f"{node_data["state"]} -> {node_data["next_state"]}"
+			duration = node_data["duration"]
+			logger.debug(f"[{t}] Node #{node}: {dynamics} ({duration} days)")
 			node_data["state"] = node_data["next_state"]
 			node_data["next_state"] = None
 			node_data["duration"] = 0
@@ -277,6 +282,23 @@ def outbreak_simulation(G,
 	"""
 	Simulates the spread of an infectious disease in a community modeled
 	by the graph G.
+
+	The algorithm for the simulation goes as follows:
+	1) Set t <- 0.
+	2) Initialize nodes attributes in G:
+		a) Sample infected nodes from G.
+		b) Sample test subjects from G and initialize the testing pool.
+		d) Initialize default/initial/t0 attributes of all nodes in G.
+		e) Adjust attributes of the sampled nodes.
+	3) Initialize initial SIR values at time step 0.
+	4) Define stopping criterion.
+	5) Loop while stopping criterion is not met:
+		a) Calculate dynamics of nodes from t to t+dt.
+		b) Set t <- t+dt.
+		c) Update state of all nodes.
+		d) Run a testing round on the testing pool.
+		e) Save SIR values for time step t.
+	6) Return SIR values for all time steps.
 
 	Args:
 		G: graph modeling the community.
@@ -343,20 +365,20 @@ def outbreak_simulation(G,
 	while not should_stop():
 
 		# Update dynamics of network
-		t += dt
 		G = update_dynamics(G, t, infection_rate, recovery_rate, dt)
-
-		# Test next round of test subjects
-		G = update_tests(G, t, testing_pool.next_round(),
-						 quarantine_length=quarantine_length,
-						 test_sensitivity=test_sensitivity,
-						 test_specificity=test_specificity)
+		t += dt
 
 		# Update state of network
 		G, SIR = update_state(G, SIR, t,
 						 	  quarantine_length=quarantine_length,
 						 	  test_sensitivity=test_sensitivity,
 						 	  test_specificity=test_specificity)
+
+		# Test next round of test subjects
+		G = update_tests(G, t, testing_pool.next_round(),
+						 quarantine_length=quarantine_length,
+						 test_sensitivity=test_sensitivity,
+						 test_specificity=test_specificity)
 		
 		# Record SIR values
 		SIR_record.append(tuple(SIR.values()))
