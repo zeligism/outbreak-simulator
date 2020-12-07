@@ -11,7 +11,7 @@ import networkx as nx
 from scipy.stats import gamma
 from multiprocessing import Pool, Process
 
-LOG_FORMAT = "%(name)s.%(process)d.%(levelname)s %(message)s"
+LOG_FORMAT = "%(name)s.%(process)d.%(levelname)s: %(message)s"
 logging.basicConfig(filename="sim.log", filemode="a", level=logging.DEBUG, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
@@ -88,13 +88,13 @@ class TestingPool:
 		self.rounds = rounds
 
 		# Initialize a chunk / partition generator
-		self.tested_chunks = chunk_generator(self.nodes, self.rounds)
+		self._tested_chunks = chunk_generator(self.nodes, self.rounds)
 
 		# Default test schedule is everyday
-		# Assuming `t` == 1 is the first weekday (i.e. Monday)
+		# Assuming `day` == 0 is the first weekday (i.e. Monday)
 		# Example of a schedule where we test everyday except weekends:
 		#     [True, True, True, True, True, False, False]
-		self.t = 1
+		self.day = 0
 		self.schedule = schedule if len(schedule) > 0 else [True]
 
 	def next_round(self):
@@ -102,9 +102,9 @@ class TestingPool:
 		Get next round of testing subjects.
 		"""
 		testing_round = []
-		if self.schedule[ (self.t - 1) % len(self.schedule) ]:
-			testing_round = next(self.tested_chunks)
-		self.t += 1
+		if self.schedule[self.day]:
+			testing_round = next(self._tested_chunks)
+		self.day = (self.day + 1) % len(self.schedule)
 		return testing_round
 
 
@@ -188,14 +188,13 @@ def update_tests(G, t, testing_pool,
 
 	Note the entry and exit points of quarantine states (i.e. 'q_state'):
 	• Entry only happens when a test subject is in turn for the next testing
-	  round, and has tested positive.
-	• Exit only happens is when a quarantined subject has passed quarantine
-	  time and has tested negative.
+	  round and has tested positive.
+	• Exit only happens when a quarantined subject passes quarantine time and
+	  has tested negative.
 	
 	In the first loop, we only go through a fraction of the testing pool and
-	we ignore the quarantined subjects as well. That fraction is determined by
-	the number of testing rounds in the testing pool. This is the testing
-	round.
+	we ignore the quarantined subjects. That fraction is determined by the
+	number of testing rounds in the testing pool. This is the testing rounds.
 	In the second loop, we go through _all_ test subjects and ignore the ones
 	that are not quarantined. This is for updating the quarantine state.
 
@@ -339,14 +338,18 @@ def outbreak_simulation(sim_id,
 
 	SIR_record = []
 	t = 0
+	logger.info(f"Starting simulation #{sim_id}.")
+	logger.info(f"Experiment's random seed = {random_seed}.")
 
 	# Initialize random seed, give unique seed for each simulation
 	if random_seed is not None:
+		logger.info(f"Simulation's random seed = {random_seed + sim_id}.")
 		random.seed(random_seed + sim_id)
 		np.random.seed(random_seed + sim_id)
 
 	# Generate graph if given a graph generator
 	if callable(G):
+		logger.info(f"Generating a new graph for simulation #{sim_id}.")
 		G = G()
 
 	# Infect some nodes randomly from population

@@ -75,15 +75,6 @@ def parse_args():
 
 def main(args):
 
-	# The random seed will be set here first so that graph generation can be
-	# replicated. Though we have to take care about the randomness within the
-	# simulation as well, so we have to pass the random seed to the simulations
-	# too. In case we are using one graph, we have to pass different but unique
-	# random seeds to each simulation so that they can be compared to other
-	# runs of the experiments using various initial parameters. Otherwise,
-	# in case when regenrate the graph for each simulation, it suffices to use
-	# the same random seed for every experiment.
-
 	# Initialize random seed if provided
 	if args.random_seed is not None:
 		random.seed(args.random_seed)
