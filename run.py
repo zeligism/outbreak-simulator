@@ -1,6 +1,7 @@
 
 import argparse
 import random
+import functools
 import numpy as np
 import networkx as nx
 from outbreak_simulator import *
@@ -12,16 +13,18 @@ def parse_args():
 	parser = argparse.ArgumentParser(
 		description="Run simulations of an outbreak in a small community.")
 
-	parser.add_argument("--random_seed", type=int, default=None,
+	parser.add_argument("-s", "--random_seed", type=int, default=None,
 		help="Random seed")
-	parser.add_argument("--graph_type", type=str, default="barabasi_albert",
+	parser.add_argument("-G", "--graph_type", type=str, default="barabasi_albert",
 		help="Type of graph to generate")
-	parser.add_argument("--population", type=int, default=4000,
+	parser.add_argument("--regenerate_graph", action="store_true",
+		help="Regenerate graph every simulation")
+	parser.add_argument("-N", "--population", type=int, default=4000,
 		help="Population of community")
 
 	parser.add_argument("--initial_infected", type=int, default=1,
 		help="Number of individuals initially infected")
-	parser.add_argument("--infection_rate", type=float, default=0.05,
+	parser.add_argument("-b", "--infection_rate", type=float, default=0.05,
 		help="The daily probability of infecting a neighbor")
 	parser.add_argument("--gamma_infection", action="store_true",
 		help="Use an infection rate that follows a gamma distribution-like curve")
@@ -46,7 +49,7 @@ def parse_args():
 	parser.add_argument("--stop_if_positive", action="store_true",
 		help="Stop simulation as soon as a positive test is detected")
 
-	parser.add_argument("--num_sim", type=int, default=10,
+	parser.add_argument("-n", "--num_sim", type=int, default=10,
 		help="Number of simulations run")
 	parser.add_argument("--parallel", type=int, nargs="?", default=None, const=0,
 		help="Number of processes to run in parallel (# of CPUs if no args given)")
@@ -72,25 +75,40 @@ def parse_args():
 
 def main(args):
 
+	# The random seed will be set here first so that graph generation can be
+	# replicated. Though we have to take care about the randomness within the
+	# simulation as well, so we have to pass the random seed to the simulations
+	# too. In case we are using one graph, we have to pass different but unique
+	# random seeds to each simulation so that they can be compared to other
+	# runs of the experiments using various initial parameters. Otherwise,
+	# in case when regenrate the graph for each simulation, it suffices to use
+	# the same random seed for every experiment.
+
 	# Initialize random seed if provided
 	if args.random_seed is not None:
 		random.seed(args.random_seed)
 		np.random.seed(args.random_seed)
 
-	# Initialize graph of community
+	# Initialize generator of community network
 	if args.graph_type == "barabasi_albert":
-		G = nx.barabasi_albert_graph(args.population, 3)
+		G = functools.partial(nx.barabasi_albert_graph, args.population, 3)
 	elif args.graph_type == "erdos_renyi":
-		#G = nx.erdos_renyi_graph(args.population, 0.0025)
-		G = nx.fast_gnp_random_graph(args.population, 0.0025)
+		#G = functools.partial(nx.erdos_renyi_graph, args.population, 0.0025)
+		G = functools.partial(nx.fast_gnp_random_graph, args.population, 0.0025)
 	else:
 		NotImplementedError(f"Graph type {args.graph_type} not implemented")
+
+	# If no need to regenerate graph for each simulation, generate graph now
+	if not args.regenerate_graph:
+		G = G()
 
 	# Initialize simulation configurations
 	infection_rate = InfectionRate(args.infection_rate, args.gamma_infection)
 	recovery_rate = RecoveryRate(args.recovery_time, args.recovery_rate)
 	testing_schedule = tuple(map(bool, args.testing_schedule))
 	sim_config = {
+		"random_seed": args.random_seed,
+		"G": G,
 		"initial_infected": args.initial_infected,
 		"infection_rate": infection_rate,
 		"recovery_rate": recovery_rate,
@@ -104,8 +122,7 @@ def main(args):
 		"stop_if_positive": args.stop_if_positive,
 	}
 
-	SIRs = repeat_simulation(G=G,
-							 sim_config=sim_config,
+	SIRs = repeat_simulation(sim_config=sim_config,
 							 num_sim=args.num_sim,
 							 parallel=args.parallel,)
 
