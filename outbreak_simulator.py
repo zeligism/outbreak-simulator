@@ -11,8 +11,8 @@ import networkx as nx
 from scipy.stats import gamma
 from multiprocessing import Pool, Process
 
-FORMAT = "%(name)s.%(process)d.%(levelname)s %(message)s"
-logging.basicConfig(filename="sim.log", filemode="a", level=logging.DEBUG, format=FORMAT)
+LOG_FORMAT = "%(name)s.%(process)d.%(levelname)s %(message)s"
+logging.basicConfig(filename="sim.log", filemode="a", level=logging.DEBUG, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 
@@ -82,10 +82,13 @@ class RecoveryRate:
 
 
 class TestingPool:
-	def __init__(self, tested_nodes, rounds=1, schedule=[True]):
+	def __init__(self, nodes, rounds=1, schedule=[True]):
+
+		self.nodes = nodes
+		self.rounds = rounds
 
 		# Initialize a chunk / partition generator
-		self.tested_chunks = chunk_generator(tested_nodes, rounds)
+		self.tested_chunks = chunk_generator(self.nodes, self.rounds)
 
 		# Default test schedule is everyday
 		# Assuming `t` == 1 is the first weekday (i.e. Monday)
@@ -123,13 +126,16 @@ def update_dynamics(G, t, infection_rate, recovery_rate, dt=1):
 	for node, node_data in G.nodes(data=True):
 		# Nodes have spent dt more time in their states
 		node_data["duration"] += dt
+		# If node is quarantined, reduce remaining time in quarantine
+		if node_data["q_state"]:
+			node_data["q_rem"] -= dt
 
 		# Susceptible -> Infected
 		if node_data["state"] == "S":
 			# Check infected and not quarantined neighbors
 			for adj in G.adj[node]:
 				infected = G.nodes[adj]["state"] == "I"
-				quarantined = G.nodes[adj]["quarantine_rem"] >= 0
+				quarantined = G.nodes[adj]["q_state"]
 				if infected and not quarantined:
 					# Sample the daily probability of infecting a neighbor
 					b = infection_rate(G.nodes[adj]["duration"])
@@ -171,55 +177,80 @@ def test_state(node_state, sensitivity=1., specificity=1.,):
 	return positive
 
 
-def update_tests(G, t, tested_nodes,
-				 quarantine_length=14,
-	             test_sensitivity=1.,
-	             test_specificity=1.,
-	             delay=0):
+def update_tests(G, t, testing_pool,
+				 q_len=14,
+				 q_extend=7,
+	             sensitivity=1.,
+	             specificity=1.,
+	             delay=0,):
 	"""
-	Update tests (retest testing subjects).
+	Update tests (retest testing subjects) and quarantine state.
+
+	Note the entry and exit points of quarantine states (i.e. 'q_state'):
+	• Entry only happens when a test subject is in turn for the next testing
+	  round, and has tested positive.
+	• Exit only happens is when a quarantined subject has passed quarantine
+	  time and has tested negative.
+	
+	In the first loop, we only go through a fraction of the testing pool and
+	we ignore the quarantined subjects as well. That fraction is determined by
+	the number of testing rounds in the testing pool. This is the testing
+	round.
+	In the second loop, we go through _all_ test subjects and ignore the ones
+	that are not quarantined. This is for updating the quarantine state.
 
 	Args:
 		G: graph of community.
 		t: current time.
-		tested_nodes: nodes from G to be tested.
-		quarantine_length: time length of quarantine.
-		test_sensitivity: test sensitivity.
-		test_specificity: test specificity.
+		testing_pool: testing pool containing all test subjects.
+		q_len: time length of quarantine.
+		q_extend: extension time if still positive after finishing quarantine
+		sensitivity: test sensitivity.
+		specificity: test specificity.
 		delay: delay of test result (0 for immediate test result). TODO
 
 	Returns:
 		Updated graph.
 	"""
 
-	# If quarantine length is 0 or less, then testing is useless
-	if quarantine_length <= 0:
+	# If quarantine length is 0 or less, then testing is useless XXX: not always
+	if q_len <= 0:
 		return G
 
-	for tested_node in tested_nodes:
-		# Skip if already recovered XXX: why?
-		if G.nodes[tested_node]["state"] == "R":
-			pass #continue
-		# Skip if still in quarantine
-		if G.nodes[tested_node]["quarantine_rem"] >= 0:
+	# Resume the next testing round
+	for node in testing_pool.next_round():
+		# Skip quarantined nodes
+		if G.nodes[node]["q_state"]:
 			continue
+		# Test node, quarantine if positive
+		positive = test_state(G.nodes[node]["state"], sensitivity, specificity)
+		if positive:
+			logger.debug(f"[{t}] Quarantining positive node #{node}")
+			G.nodes[node]["q_state"] = True
+			G.nodes[node]["q_rem"] = q_len
 
-		# Test node and record test time
-		positive = test_state(G.nodes[tested_node]["state"],
-							  test_sensitivity, test_specificity)
-
-		# Add patient to quarantine if tested positive
-		if positive and quarantine_length > 0:
-			logger.debug(f"[{t}] Quarantining positive node #{tested_node}")
-			G.nodes[tested_node]["quarantine_rem"] = quarantine_length
+	# Update state of all quarantined subjects
+	for node in testing_pool.nodes:
+		# Skip non-quarantined nodes
+		if not G.nodes[node]["q_state"]:
+			continue
+		# If node finished quarantine, retest
+		if G.nodes[node]["q_rem"] <= 0:
+			positive = test_state(G.nodes[node]["state"],
+								  sensitivity, specificity)
+			# Extend quarantine if still positive
+			if positive:
+				G.nodes[node]["q_rem"] = q_extend
+				logger.debug(f"[{t}] Node #{node} extends quarantine")
+			# Exit quarantine otherwise
+			else:
+				G.nodes[node]["q_state"] = False
+				logger.debug(f"[{t}] Node #{node} exits quarantine")
 
 	return G
 
 
-def update_state(G, SIR, t, 
-				 quarantine_length=14,
-				 test_sensitivity=1.,
-	             test_specificity=1.,):
+def update_state(G, SIR, t):
 	"""
 	Update the state/attributes of network G.
 
@@ -228,37 +259,19 @@ def update_state(G, SIR, t,
 		SIR: a dict of compartment sizes indexed by the
 			 compartment's name (e.g. "S" for susceptible).
 		t: current time.
-		quarantine_length: minimum time to quarantine
-		test_sensitivity: test sensitivity.
-		test_specificity: test specificity.
 
 	Returns:
 		Updated graph and new compartment sizes.
 	"""
 	for node, node_data in G.nodes(data=True):
-		# Check quarantine state
-		if node_data["quarantine_rem"] > 0:
-			node_data["quarantine_rem"] -= 1
-		elif node_data["quarantine_rem"] == 0:
-			# Node finished quarantine, retest
-			positive = test_state(node_data["state"],
-								  test_sensitivity, test_specificity)
-			# Increase quarantine by 1 week if still positive
-			if positive:
-				node_data["quarantine_rem"] = 7  # XXX: hardcoded values
-				logger.debug(f"[{t}] Node #{node} extends quarantine")
-			else:
-				node_data["quarantine_rem"] = -1  # not quarantined
-				logger.debug(f"[{t}] Node #{node} exits quarantine")
-
 		if node_data["next_state"] is not None:
+			dynamics = node_data["state"] +  " -> " + node_data["next_state"]
+			duration = node_data["duration"]
+			logger.debug(f"[{t}] Node #{node}: {dynamics} ({duration} days)")
 			# Update compartment sizes
 			SIR[node_data["state"]] -= 1
 			SIR[node_data["next_state"]] += 1
 			# Update state and reset state dynamics
-			dynamics = f"{node_data["state"]} -> {node_data["next_state"]}"
-			duration = node_data["duration"]
-			logger.debug(f"[{t}] Node #{node}: {dynamics} ({duration} days)")
 			node_data["state"] = node_data["next_state"]
 			node_data["next_state"] = None
 			node_data["duration"] = 0
@@ -266,7 +279,9 @@ def update_state(G, SIR, t,
 	return G, SIR
 
 
-def outbreak_simulation(G,
+def outbreak_simulation(sim_id,
+						random_seed=None,
+						G=nx.barabasi_albert_graph(4000, 3),
 						dt=1,
 						initial_infected=1,
 						infection_rate=InfectionRate(0.1, False),
@@ -293,7 +308,7 @@ def outbreak_simulation(G,
 	3) Initialize initial SIR values at time step 0.
 	4) Define stopping criterion.
 	5) Loop while stopping criterion is not met:
-		a) Calculate dynamics of nodes from t to t+dt.
+		a) Update dynamics of nodes from t to t+dt.
 		b) Set t <- t+dt.
 		c) Update state of all nodes.
 		d) Run a testing round on the testing pool.
@@ -301,7 +316,9 @@ def outbreak_simulation(G,
 	6) Return SIR values for all time steps.
 
 	Args:
-		G: graph modeling the community.
+		sim_id: a unique identifier of this simulation.
+		random_seed: random seed.
+		G: a graph or a graph generator, modeling the community.
 		dt: time step.
 		initial_infected: number of infected nodes in the beginning.
 		infection_rate: infection rate (in units of 1/dt).
@@ -323,6 +340,15 @@ def outbreak_simulation(G,
 	SIR_record = []
 	t = 0
 
+	# Initialize random seed, give unique seed for each simulation
+	if random_seed is not None:
+		random.seed(random_seed + sim_id)
+		np.random.seed(random_seed + sim_id)
+
+	# Generate graph if given a graph generator
+	if callable(G):
+		G = G()
+
 	# Infect some nodes randomly from population
 	infected_nodes = np.random.choice(G.nodes, initial_infected, replace=False)
 	# Sample test subjects from population
@@ -342,15 +368,17 @@ def outbreak_simulation(G,
 	}
 
 	# Initialize default attributes of nodes (i.e. people):
-	# - state: node's state at `t`
-	# - next_state: node's state at `t+dt`, None if not changed
-	# - duration: amount of time the node spent in the current state
-	# - quarantine_rem: remaining time of quarantine (< 0 means not in qrtn)
+	# - state: node's state at t
+	# - next_state: node's state at t+dt, None if same as t
+	# - duration: days spent in the current state
+	# - q_state: True if in quarantine, False if not
+	# - q_rem: days remaining in quarantine
 	for _, node_data in G.nodes(data=True):
 		node_data["state"] = "S"
 		node_data["next_state"] =  None
 		node_data["duration"] =  0
-		node_data["quarantine_rem"] =  -1
+		node_data["q_state"] = False
+		node_data["q_rem"] = 0
 	for infected_node in infected_nodes:
 		# Correct state of infected nodes
 		G.nodes[infected_node]["state"] = "I"
@@ -369,16 +397,13 @@ def outbreak_simulation(G,
 		t += dt
 
 		# Update state of network
-		G, SIR = update_state(G, SIR, t,
-						 	  quarantine_length=quarantine_length,
-						 	  test_sensitivity=test_sensitivity,
-						 	  test_specificity=test_specificity)
+		G, SIR = update_state(G, SIR, t)
 
 		# Test next round of test subjects
-		G = update_tests(G, t, testing_pool.next_round(),
-						 quarantine_length=quarantine_length,
-						 test_sensitivity=test_sensitivity,
-						 test_specificity=test_specificity)
+		G = update_tests(G, t, testing_pool,
+						 q_len=quarantine_length,
+						 sensitivity=test_sensitivity,
+						 specificity=test_specificity)
 		
 		# Record SIR values
 		SIR_record.append(tuple(SIR.values()))
@@ -489,10 +514,8 @@ def plot_averaged_SIRs(SIRs,
 			pickle.dump(SIR_lines, f)
 
 
-def repeat_simulation(G=nx.barabasi_albert_graph(4000, 3),
-					  sim_config={},
+def repeat_simulation(sim_config={},
 					  num_sim=100,
-					  regenerate_graph=False,
 					  parallel=None):
 	"""
 	Repeats an outbreak simulation given its config.
@@ -500,30 +523,25 @@ def repeat_simulation(G=nx.barabasi_albert_graph(4000, 3),
 	Args:
 		sim_config: config of the outbreak simulation.
 		num_sim: number of simulations to run.
-		G: can be a graph or a callable that generates a graph.
 		parallel: number of processes to run in parallel (# of CPUs if 0).
-				   Doesn't run in parallel if None.
+				  Doesn't run in parallel if None.
 
 	Return:
 		list of SIR curves for all simulations.
 	"""
 	
 	# Define simulation task based on given config.
-	# This will return a function `sim(G)` that takes a graph as an arg.
+	# This will return a function `sim(sim_id)` that takes an identifier.
 	sim = functools.partial(outbreak_simulation, **sim_config)
-
-	# initialize graphs for each simulation
-	new_G = G if callable(G) else lambda: G.copy()
-	graphs = (new_G() for _ in range(num_sim))
+	sim_ids = list(range(num_sim))
 
 	# Run simulations in parallel
-	if parallel is None or num_sim <= 10:
-		SIRs = [sim(graph) for graph in graphs]
+	if parallel is None or num_sim < 5:
+		SIRs = [sim(sim_id) for sim_id in sim_ids]
 	else:
 		processes = parallel if parallel > 0 else None
 		with Pool(processes=processes) as pool:
-			SIRs = pool.map(sim, graphs)
-
+			SIRs = pool.map(sim, sim_ids)
 
 	return SIRs
 
