@@ -12,8 +12,13 @@ from scipy.stats import gamma
 from multiprocessing import Pool, Process
 
 LOG_FORMAT = "%(name)s.%(process)d.%(levelname)s: %(message)s"
-logging.basicConfig(filename="sim.log", filemode="a", level=logging.DEBUG, format=LOG_FORMAT)
+logging.basicConfig(filename="sim.log", filemode="a", level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
+
+
+def init_random_seed(seed):
+	random.seed(seed)
+	np.random.seed(seed)
 
 
 def chunk_generator(array, num_chunks, repeat=True):
@@ -315,7 +320,7 @@ def outbreak_simulation(sim_id,
 	6) Return SIR values for all time steps.
 
 	Args:
-		sim_id: a unique identifier of this simulation.
+		sim_id: a unique non-negative integer identifier
 		random_seed: random seed.
 		G: a graph or a graph generator, modeling the community.
 		dt: time step.
@@ -343,14 +348,14 @@ def outbreak_simulation(sim_id,
 
 	# Initialize random seed, give unique seed for each simulation
 	if random_seed is not None:
-		logger.info(f"Simulation's random seed = {random_seed + sim_id}.")
-		random.seed(random_seed + sim_id)
-		np.random.seed(random_seed + sim_id)
+		init_random_seed(random_seed)
+		for _ in range(sim_id + 1):
+			sim_seed = np.random.randint(1 << 32)
+		init_random_seed(sim_seed)
+		logger.info(f"Simulation's random seed = {sim_seed}.")
 
 	# Generate graph if given a graph generator
-	if callable(G):
-		logger.info(f"Generating a new graph for simulation #{sim_id}.")
-		G = G()
+	G = G() if callable(G) else G.copy()
 
 	# Infect some nodes randomly from population
 	infected_nodes = np.random.choice(G.nodes, initial_infected, replace=False)
@@ -550,8 +555,7 @@ def repeat_simulation(sim_config={},
 
 
 def main():
-	random.seed(123)
-	np.random.seed(123)
+	init_random_seed(123)
 	plot_averaged_SIRs(repeat_simulation(), figname=None, show_plot=True)
 
 

@@ -77,14 +77,13 @@ def main(args):
 
 	# Initialize random seed if provided
 	if args.random_seed is not None:
-		random.seed(args.random_seed)
-		np.random.seed(args.random_seed)
+		init_random_seed(args.random_seed)
 
 	# Initialize generator of community network
 	if args.graph_type == "barabasi_albert":
 		G = functools.partial(nx.barabasi_albert_graph, args.population, 3)
 	elif args.graph_type == "erdos_renyi":
-		#G = functools.partial(nx.erdos_renyi_graph, args.population, 0.0025)
+		# Use nx.erdos_renyi_graph if p is large (i.e. graph is not sparse)
 		G = functools.partial(nx.fast_gnp_random_graph, args.population, 0.0025)
 	else:
 		NotImplementedError(f"Graph type {args.graph_type} not implemented")
