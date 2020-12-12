@@ -90,7 +90,7 @@ def main(args):
 		# Use nx.erdos_renyi_graph if p is large (i.e. graph is not sparse)
 		G = functools.partial(nx.fast_gnp_random_graph, args.population, 0.0025)
 	else:
-		NotImplementedError(f"Graph type {args.graph_type} not implemented")
+		raise NotImplementedError(f"Graph type {args.graph_type} not implemented")
 
 	# If no need to regenerate graph for each simulation, generate graph now
 	if not args.regenerate_graph:
