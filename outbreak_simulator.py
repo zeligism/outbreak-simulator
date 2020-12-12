@@ -192,16 +192,16 @@ def update_tests(G, t, testing_pool,
 	Update tests (retest testing subjects) and quarantine state.
 
 	Note the entry and exit points of quarantine states (i.e. 'q_state'):
-	• Entry only happens when a test subject is in turn for the next testing
-	  round and has tested positive.
+	• Entry only happens when a subject receives a positive test result.
 	• Exit only happens when a quarantined subject passes quarantine time and
-	  has tested negative.
+	  receives negative test result.
 	
-	In the first loop, we only go through a fraction of the testing pool and
-	we ignore the quarantined subjects. That fraction is determined by the
-	number of testing rounds in the testing pool. This is the testing rounds.
-	In the second loop, we go through _all_ test subjects and ignore the ones
-	that are not quarantined. This is for updating the quarantine state.
+	In the first loop, we only go through the fraction of the testing pool and
+	that are supposed to be testing. That fraction is determined by the
+	number of testing rounds in the testing pool. This is the testing round.
+	In the second loop, we go through _all_ test subjects and handle all
+	remaining cases (subjects expecting test result, quarantined subjects,
+	etc.)
 
 	Args:
 		G: graph of community.
@@ -211,7 +211,8 @@ def update_tests(G, t, testing_pool,
 		q_extend: extension time if still positive after finishing quarantine
 		sensitivity: test sensitivity.
 		specificity: test specificity.
-		delay: delay of test result (0 for immediate test result). TODO
+		delay: delay of test result (0 for immediate test result).
+			   XXX: does not delay test results for quarantine extension.
 
 	Returns:
 		Updated graph.
@@ -223,23 +224,27 @@ def update_tests(G, t, testing_pool,
 
 	# Resume the next testing round
 	for node in testing_pool.next_round():
-		# Skip quarantined nodes
-		if G.nodes[node]["q_state"]:
+		# Skip quarantined nodes or nodes pending positive test result
+		if G.nodes[node]["q_state"] or t <= G.nodes[node]["positive_t"]:
 			continue
-		# Test node, quarantine if positive
-		positive = test_state(G.nodes[node]["state"], sensitivity, specificity)
+		# Test node
+		positive = test_state(G.nodes[node]["state"],
+							  sensitivity, specificity)
+		# If positive, record time to receive positive test result back
 		if positive:
-			logger.debug(f"[{t}] Quarantining positive node #{node}")
+			G.nodes[node]["positive_t"] = t + delay
+
+	# Update state of all subjects
+	for node in testing_pool.nodes:
+		# Handle nodes expecting positive test result
+		if G.nodes[node]["positive_t"] == t:
+			logger.debug(f"[{t}] Node #{node} enters quarantine")
+			# Quarantine node
 			G.nodes[node]["q_state"] = True
 			G.nodes[node]["q_rem"] = q_len
 
-	# Update state of all quarantined subjects
-	for node in testing_pool.nodes:
-		# Skip non-quarantined nodes
-		if not G.nodes[node]["q_state"]:
-			continue
-		# If node finished quarantine, retest
-		if G.nodes[node]["q_rem"] <= 0:
+		# Handle nodes that finished quarantine
+		if G.nodes[node]["q_state"] and G.nodes[node]["q_rem"] <= 0:
 			positive = test_state(G.nodes[node]["state"],
 								  sensitivity, specificity)
 			# Extend quarantine if still positive
@@ -295,6 +300,7 @@ def outbreak_simulation(sim_id,
 						testing_schedule=[True],
 						test_sensitivity=1.0,
 						test_specificity=1.0,
+						test_delay=0,
 						quarantine_length=14,
 						report_interval=1000,
 						stop_if_positive=False,):
@@ -333,6 +339,7 @@ def outbreak_simulation(sim_id,
 		testing_schedule: a cyclical schedule where False means no testing.
 		test_sensitivity: test sensitivity.
 		test_specificity: test specificity.
+		test_delay: amount of time needed to get results after testing
 		quarantine_length: time should be spent in quarantine.
 		report_interval: reporting interval for SIR values (in dt).
 		stop_if_positive: stops simulation when a test subject gets infected.
@@ -343,7 +350,7 @@ def outbreak_simulation(sim_id,
 
 	SIR_record = []
 	t = 0
-	logger.info(f"Starting simulation #{sim_id}.")
+	logger.info(f"Start simulation #{sim_id}.")
 	logger.info(f"Experiment's random seed = {random_seed}.")
 
 	# Initialize random seed, give unique seed for each simulation
@@ -379,12 +386,14 @@ def outbreak_simulation(sim_id,
 	# - state: node's state at t
 	# - next_state: node's state at t+dt, None if same as t
 	# - duration: days spent in the current state
+	# - positive_t: time when positive test result is out
 	# - q_state: True if in quarantine, False if not
 	# - q_rem: days remaining in quarantine
 	for _, node_data in G.nodes(data=True):
 		node_data["state"] = "S"
 		node_data["next_state"] =  None
 		node_data["duration"] =  0
+		node_data["positive_t"] = -1
 		node_data["q_state"] = False
 		node_data["q_rem"] = 0
 	for infected_node in infected_nodes:
@@ -411,7 +420,8 @@ def outbreak_simulation(sim_id,
 		G = update_tests(G, t, testing_pool,
 						 q_len=quarantine_length,
 						 sensitivity=test_sensitivity,
-						 specificity=test_specificity)
+						 specificity=test_specificity,
+						 delay=test_delay)
 		
 		# Record SIR values
 		SIR_record.append(tuple(SIR.values()))
@@ -420,6 +430,10 @@ def outbreak_simulation(sim_id,
 		if round(t / dt) % report_interval == 0:
 			S, I, R = SIR_record[-1]
 			logger.info(f"[{t}] S = {S}, I = {I}, R = {R}")
+
+	logger.info(f"[{t}] Simulation done.")
+	S, I, R = SIR_record[-1]
+	logger.info(f"[{t}] Cumulative infected individuals = {I+R}")
 
 	return tuple(zip(*SIR_record))
 
@@ -435,7 +449,7 @@ def plot_SIR(S, I, R):
 
 
 def plot_averaged_SIRs(SIRs,
-					   max_t="auto",
+					   max_t=None,
 					   lines_to_plot="IR",
 					   means_to_plot="SIR",
 					   figname="SIRs.png",
@@ -448,7 +462,7 @@ def plot_averaged_SIRs(SIRs,
 
 	Args:
 		SIRs: a list of SIR curves.
-		max_t: plot up to `max_t` days, set to 'auto' to auto-detect max.
+		max_t: plot up to `max_t` days, set to None to auto-detect max.
 		lines_to_plot: plot the lines of all sims for each comp. in `lines`.
 		means_to_plot: plot the mean of all sims for each comp. in `means`.
 		figname: name of figure to save, None if no need to save fig.
@@ -460,7 +474,7 @@ def plot_averaged_SIRs(SIRs,
 	compartments = ("S", "I", "R")
 	colors = {"S": u'#1f77b4', "I": u'#ff7f0e', "R": u'#2ca02c'}
 
-	if max_t == "auto":
+	if max_t is None:
 		max_t = max(len(line) for SIR in SIRs for line in SIR)
 
 	lines_shape = (len(SIRs), max_t+1)

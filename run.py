@@ -42,6 +42,8 @@ def parse_args():
 		help="Sensitivity of test (i.e. rate of true positives among positives)")
 	parser.add_argument("--test_specificity", type=float, default=1.0,
 		help="Specificity of test (i.e. rate of true negatives among negatives)")
+	parser.add_argument("--test_delay", type=int, default=0,
+		help="Number of days needed to get test results back)")
 	parser.add_argument("--quarantine_length", type=int, default=14,
 		help="Time to spend in quarantine after testing positive")
 	parser.add_argument("--report_interval", type=int, default=1000,
@@ -62,6 +64,8 @@ def parse_args():
 		help="Name of figure to save")
 	parser.add_argument("--figtitle", type=str, default=None,
 		help="Title of figure")
+	parser.add_argument("--max_t", type=int, default=None,
+		help="Limit of x axis (time)")
 	parser.add_argument("--show_plot", action="store_true",
 		help="Show plot")
 	parser.add_argument("--save_data", action="store_true",
@@ -107,6 +111,7 @@ def main(args):
 		"testing_schedule": testing_schedule,
 		"test_sensitivity": args.test_sensitivity,
 		"test_specificity": args.test_specificity,
+		"test_delay": args.test_delay,
 		"quarantine_length": args.quarantine_length,
 		"report_interval": args.report_interval,
 		"stop_if_positive": args.stop_if_positive,
@@ -117,6 +122,7 @@ def main(args):
 							 parallel=args.parallel,)
 
 	plot_averaged_SIRs(SIRs,
+					   max_t=args.max_t,
 					   lines_to_plot=args.lines_to_plot,
 					   means_to_plot=args.means_to_plot,
 					   figname=args.figname,
