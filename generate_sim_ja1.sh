@@ -1,6 +1,7 @@
 
-ja_file="sim.ja"
+ja_file="exp1.ja"
 rm -f "$ja_file"
+mkdir -p "exp1"
 
 INFECTION_RATE=("0.025" "0.05" "0.075" "0.1")
 TESTING_CAPACITY=("0.01" "0.1")
@@ -29,7 +30,7 @@ for infection_rate in "${INFECTION_RATE[@]}"; do
         command+=" --testing_schedule 1 1 1 1 1 0 0"
         command+=" --quarantine_length $quarantine_length"
         command+=" --num_sim 100"
-        command+=" --figname plots/${figname}.png"
+        command+=" --figname exp1/${figname}.png"
         #command+=" --parallel"
         echo "$command" >> "$ja_file"
       done
@@ -54,7 +55,7 @@ for infection_rate in "${INFECTION_RATE[@]}"; do
   command+=" --testing_schedule 1 1 1 1 1 0 0"
   command+=" --quarantine_length 0"
   command+=" --num_sim 100"
-  command+=" --figname plots/${figname}.png"
+  command+=" --figname exp1/${figname}.png"
   #command+=" --parallel"
   echo "$command" >> "$ja_file"
 done
