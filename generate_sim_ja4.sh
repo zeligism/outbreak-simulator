@@ -7,7 +7,7 @@ DATA_DIR="exp4"
 mkdir -p "$DATA_DIR"
 
 INFECTION_RATES=("0.0005" "0.001" "0.002" "0.003" "0.005" "0.010" "0.015" "0.025" "0.050" "0.100")
-GRAPH_TYPES=("barbasi_albert" "erdos_renyi")
+GRAPH_TYPES=("barabasi_albert" "erdos_renyi")
 
 # Construct base run of this job
 baserun="time python run.py"
