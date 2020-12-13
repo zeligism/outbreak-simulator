@@ -224,20 +224,20 @@ def update_tests(G, t, testing_pool,
 
 	# Resume the next testing round
 	for node in testing_pool.next_round():
-		# Skip quarantined nodes or nodes pending positive test result
-		if G.nodes[node]["q_state"] or t <= G.nodes[node]["positive_t"]:
+		# Skip quarantined nodes or nodes that are waiting for test results
+		if G.nodes[node]["q_state"]:
 			continue
 		# Test node
 		positive = test_state(G.nodes[node]["state"],
 							  sensitivity, specificity)
 		# If positive, record time to receive positive test result back
-		if positive:
+		if positive and G.nodes[node]["positive_t"] is None:
 			G.nodes[node]["positive_t"] = t + delay
 
 	# Update state of all subjects
 	for node in testing_pool.nodes:
 		# Handle nodes expecting positive test result
-		if G.nodes[node]["positive_t"] == t:
+		if t == G.nodes[node]["positive_t"]:
 			logger.debug(f"[{t}] Node #{node} enters quarantine")
 			# Quarantine node
 			G.nodes[node]["q_state"] = True
@@ -393,7 +393,7 @@ def outbreak_simulation(sim_id,
 		node_data["state"] = "S"
 		node_data["next_state"] =  None
 		node_data["duration"] =  0
-		node_data["positive_t"] = -1
+		node_data["positive_t"] = None
 		node_data["q_state"] = False
 		node_data["q_rem"] = 0
 	for infected_node in infected_nodes:
