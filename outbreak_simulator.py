@@ -55,8 +55,8 @@ class InfectionRate:
 
 		# Use gamma distribution for infection rate
 		gamma_pdf = lambda t: gamma.pdf(t, a=2.25, scale=2.8)
-		# Store values up to 50 days (unlikely to go past that)
-		gamma_cache = [gamma_pdf(t) for t in range(51)]
+		# Store values up to 100 days (unlikely to go beyond that)
+		gamma_cache = [gamma_pdf(t) for t in range(101)]
 		# Renormalize s.t. peak == rate
 		c = self.infection_rate / max(gamma_cache)
 		gamma_cache = [c * g for g in gamma_cache]
@@ -65,7 +65,10 @@ class InfectionRate:
 
 	def __call__(self, duration=None):
 		if self.gamma_infection:
-			return self.gamma[duration]
+			if duration < len(self.gamma):
+				return self.gamma[duration]
+			else:
+				return 0
 		else:
 			return self.infection_rate
 
