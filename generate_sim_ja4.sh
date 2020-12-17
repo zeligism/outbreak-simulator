@@ -1,13 +1,14 @@
 
-ja_file="exp4.ja"
+EXP="exp4"
+
+ja_file="${EXP}.ja"
+data_dir="$EXP"
 rm -f "$ja_file"
+mkdir -p "$data_dir"
 
-# Data directory of this experiment
-DATA_DIR="exp4"
-mkdir -p "$DATA_DIR"
-
-INFECTION_RATES=("0.0005" "0.001" "0.002" "0.003" "0.005" "0.010" "0.015" "0.025" "0.050" "0.100")
+INFECTION_RATES=($(seq 0.01 0.01 0.10))
 GRAPH_TYPES=("barabasi_albert" "erdos_renyi")
+QUARANTINE_LENGTHS=(0 1 7 14)
 
 # Construct base run of this job
 baserun="time python run.py"
@@ -17,22 +18,27 @@ baserun+=" --num_sim 100"
 baserun+=" --gamma_infection"
 baserun+=" --recovery_time 14"
 baserun+=" --recovery_rate 0.3333"
+baserun+=" --testing_capacity 1.0"
+baserun+=" --testing_rounds 10"
 baserun+=" --testing_schedule 1 1 1 1 1 0 0"
-baserun+=" --quarantine_length 14"
+baserun+=" --max_t 120"
 
 for infection_rate in "${INFECTION_RATES[@]}"; do
   for graph_type in "${GRAPH_TYPES[@]}"; do
-    # Add varying parameters to base run
-    command="$baserun"
-    command+=" --infection_rate $infection_rate"
-    command+=" --graph_type $graph_type"
-    # Choose a unique name for this figure
-    figname="SIRs_beta=${infection_rate}_G=${graph_type}"
-    figtitle="beta = ${infection_rate}, G = ${graph_type}"
-    command+=" --figname '${DATA_DIR}/${figname}.png'"
-    command+=" --figtitle '$figtitle'"
-    # Add command to job array file
-    echo "$command" >> "$ja_file"
+    for quarantine_length in "${QUARANTINE_LENGTHS[@]}"; do
+      # Add varying parameters to base run
+      command="$baserun"
+      command+=" --infection_rate $infection_rate"
+      command+=" --graph_type $graph_type"
+      command+=" --quarantine_length $quarantine_length"
+      # Choose a unique name for this figure
+      figname="SIRs_beta=${infection_rate}_G=${graph_type}_qlen=${quarantine_length}"
+      figtitle="beta = ${infection_rate}, G = ${graph_type}, qlen = ${quarantine_length}"
+      command+=" --figname '${data_dir}/${figname}.png'"
+      command+=" --figtitle '$figtitle'"
+      # Add command to job array file
+      echo "$command" >> "$ja_file"
+    done
   done
 done
 
