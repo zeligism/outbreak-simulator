@@ -32,7 +32,7 @@ def parse_args():
 		help="Minimum time to recover")
 	parser.add_argument("--recovery_rate", type=float, default=0.33,
 		help="Daily probability of recovering after `recovery_time`")
-	parser.add_argument("--testing_capacity", type=float, default=0.1,
+	parser.add_argument("--testing_capacity", type=float, default=1.0,
 		help="Size of testing pool as a percentage of whole population")
 	parser.add_argument("--testing_rounds", type=int, default=10,
 		help="Number of testing rounds to run until whole pool is tested")
@@ -58,7 +58,7 @@ def parse_args():
 
 	parser.add_argument("--lines_to_plot", type=str, default="IR",
 		help="Which compartment lines to plot")
-	parser.add_argument("--means_to_plot", type=str, default="SIR",
+	parser.add_argument("--means_to_plot", type=str, default="IR",
 		help="Which compartment means to plot")
 	parser.add_argument("--figname", type=str, default=None,
 		help="Name of figure to save")
