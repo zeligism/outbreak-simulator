@@ -8,6 +8,9 @@ import functools
 import numpy as np
 import matplotlib.pyplot as plt
 import networkx as nx
+from networkx.algorithms.connectivity.connectivity import all_pairs_node_connectivity
+from networkx.algorithms.centrality import betweenness_centrality, closeness_centrality, percolation_centrality
+from networkx.algorithms.traversal.breadth_first_search import bfs_successors
 from scipy.stats import gamma
 from multiprocessing import Pool, Process
 
@@ -90,10 +93,21 @@ class RecoveryRate:
 
 
 class TestingPool:
-	def __init__(self, nodes, rounds=1, schedule=[True]):
-
+	def __init__(self, G, nodes,
+				 rounds=1,
+				 schedule=[True],
+				 sort=False,
+				 max_neighbors=2,
+				 max_depth=4):
+		# Best (1, 2-3) or (2, 4-5) or (3, 4)
+		self.G = G
 		self.nodes = nodes
 		self.rounds = rounds
+
+		# Sort nodes based on priority of testing
+		if sort:
+			self.nodes = self.sort_by_neighbor_priority(self.G, self.nodes,
+				max_neighbors=max_neighbors, max_depth=max_depth)
 
 		# Initialize a chunk / partition generator
 		self._tested_chunks = chunk_generator(self.nodes, self.rounds)
@@ -114,6 +128,28 @@ class TestingPool:
 			testing_round = next(self._tested_chunks)
 		self.day = (self.day + 1) % len(self.schedule)
 		return testing_round
+
+	@staticmethod
+	def sort_by_neighbor_priority(G, nodes, max_neighbors=1, max_depth=1):
+		rem_nodes = set(nodes)
+		sorted_nodes = []
+		while len(sorted_nodes) < len(nodes):
+			# Sample node randomly
+			random_node = np.random.choice(list(rem_nodes), 1)[0]
+
+			def sort_neighbors(neighbors):
+				neighbors = [n for n in neighbors if n in rem_nodes]
+				return sorted(neighbors)[:max_neighbors]
+
+			bfs_adjs = bfs_successors(G, random_node,
+									  depth_limit=max_depth,
+									  sort_neighbors=sort_neighbors)			
+			sorted_group = [random_node] + [adj for _, adjs in bfs_adjs for adj in adjs]
+			sorted_nodes += sorted_group
+			rem_nodes -= set(sorted_group)
+
+		return sorted_nodes
+
 
 
 def update_dynamics(G, t, infection_rate, recovery_rate, dt=1):
@@ -149,6 +185,7 @@ def update_dynamics(G, t, infection_rate, recovery_rate, dt=1):
 					b = infection_rate(G.nodes[adj]["duration"])
 					if np.random.binomial(int(dt), b) > 0:
 						node_data["next_state"] = "I"
+						node_data["infected_by"] = (t, adj)
 						logger.debug(f"[{t}] Node #{adj} infected node #{node}")
 						break
 
@@ -301,6 +338,9 @@ def outbreak_simulation(sim_id,
 						testing_capacity=0.1,
 						testing_rounds=10,
 						testing_schedule=[True],
+						sort_tests=False,
+						sort_max_neighbors=1,
+						sort_max_depth=1,
 						test_sensitivity=1.0,
 						test_specificity=1.0,
 						test_delay=0,
@@ -340,6 +380,9 @@ def outbreak_simulation(sim_id,
 						  measured as a fraction of the whole population.
 		testing_rounds: how many rounds to divide the testing pool.
 		testing_schedule: a cyclical schedule where False means no testing.
+		sort_tests: whether testing pool gets (strategically) sorted or not.
+		sort_max_neighbors: 'max_neighbors' param in the sorting strategy.
+		sort_max_depth: 'max_depth' param in the sorting strategy.
 		test_sensitivity: test sensitivity.
 		test_specificity: test specificity.
 		test_delay: amount of time needed to get results after testing
@@ -369,13 +412,17 @@ def outbreak_simulation(sim_id,
 
 	# Infect some nodes randomly from population
 	infected_nodes = np.random.choice(G.nodes, initial_infected, replace=False)
+	I0 = list(infected_nodes)[0]
 	# Sample test subjects from population
 	num_tested_nodes = round(testing_capacity * len(G.nodes))
 	tested_nodes = np.random.choice(G.nodes, num_tested_nodes, replace=False)
 	# Create testing pool
-	testing_pool = TestingPool(tested_nodes,
+	testing_pool = TestingPool(G, tested_nodes,
 							   rounds=testing_rounds,
-							   schedule=testing_schedule)
+							   schedule=testing_schedule,
+							   sort=sort_tests,
+							   max_neighbors=sort_max_neighbors,
+							   max_depth=sort_max_depth)
 
 
 	# Track the number of nodes in each compartment
@@ -399,6 +446,7 @@ def outbreak_simulation(sim_id,
 		node_data["positive_t"] = None
 		node_data["q_state"] = False
 		node_data["q_rem"] = 0
+		node_data["infected_by"] = None
 	for infected_node in infected_nodes:
 		# Correct state of infected nodes
 		G.nodes[infected_node]["state"] = "I"
@@ -434,11 +482,18 @@ def outbreak_simulation(sim_id,
 			S, I, R = SIR_record[-1]
 			logger.info(f"[{t}] S = {S}, I = {I}, R = {R}")
 
-	logger.info(f"[{t}] Simulation done.")
 	S, I, R = SIR_record[-1]
+	logger.info(f"[{t}] Simulation done.")
 	logger.info(f"[{t}] Cumulative infected individuals = {I+R}")
 
-	return tuple(zip(*SIR_record))
+	SIR = tuple(zip(*SIR_record))
+	I0_round = 1 + list(testing_pool.nodes).index(I0) // testing_pool.rounds
+	I0_infections = len([None for _, data in G.nodes(data=True)
+						 if data["infected_by"] is not None and data["infected_by"][1] == I0])
+	infections = [(data["infected_by"][0], data["infected_by"][1], n) for n, data in G.nodes(data=True)
+				  if data["infected_by"] is not None]
+
+	return SIR, I0, I0_round, I0_infections, infections
 
 
 def plot_SIR(S, I, R):
@@ -562,13 +617,81 @@ def repeat_simulation(sim_config={},
 
 	# Run simulations in parallel
 	if parallel is None or num_sim < 5:
-		SIRs = [sim(sim_id) for sim_id in sim_ids]
+		results = [sim(sim_id) for sim_id in sim_ids]
 	else:
 		processes = parallel if parallel > 0 else None
 		with Pool(processes=processes) as pool:
-			SIRs = pool.map(sim, sim_ids)
+			results = pool.map(sim, sim_ids)
+
+	SIRs, I0s, I0_rounds, I0_infections, infections = zip(*results)
+
+	#inspect_results(sim_config["G"], results, x_axis="max_I")
 
 	return SIRs
+
+
+def inspect_results(G, results, x_axis="max_I"):
+
+	SIRs, I0s, I0_rounds, I0_infections, infections = zip(*results)
+	Ss, Is, Rs = zip(*SIRs)
+
+	x = [max(i) for i in Is] if x_axis == "max_I" else [R[-1] for R in Rs]
+	xlabel = "Max I" if x_axis == "max_I" else "Total Cumulative Infections"
+	color = np.log(np.array(x)) / max(np.log(np.array(x)))
+
+	"""
+	bc = betweenness_centrality(G)
+	cc = closeness_centrality(G)
+	plt.figure(figsize=(13, 8))
+	plt.scatter(x, [bc[i0] for i0 in I0s], label="betweenness")
+	plt.scatter(x, [cc[i0] for i0 in I0s], label="closeness")
+	plt.xlabel(xlabel)
+	plt.ylabel("Centrality Scores")
+	plt.legend()
+	plt.show()
+
+	plt.figure(figsize=(13, 8))
+	plt.scatter(x, I0_rounds)
+	plt.xlabel(xlabel)
+	plt.ylabel("Round in which I0 tested")
+	plt.show()
+
+	plt.figure(figsize=(13, 8))
+	plt.scatter(x, I0_infections)
+	plt.xlabel(xlabel)
+	plt.ylabel("# of infections by I0")
+	plt.show()
+
+	plt.figure(figsize=(13, 8))
+	plt.scatter(x, [G.degree[i0] for i0 in I0s])
+	plt.xlabel(xlabel)
+	plt.ylabel("Degree")
+	plt.show()
+
+	plt.figure(figsize=(13, 8))
+	plt.scatter(x,
+		[sum([d for _, d in G.degree(G.neighbors(i0))]) / len(list(G.neighbors(i0))) for i0 in I0s])
+	plt.xlabel(xlabel)
+	plt.ylabel("Neighbors Avg Degree")
+	plt.show()
+	"""
+
+	plt.figure(figsize=(13, 8))
+	edges_set = set((n1,n2) for edges in infections for _, n1 ,n2 in edges)
+	edge_id = {e: i for i, e in enumerate(edges_set)}
+	scatter_x = []
+	scatter_y = []
+	scatter_color = []
+	for x_elem, edges in zip(x, infections):
+		scatter_color += [np.log(1+t/250) for t, _, _ in edges]
+		scatter_x += [edge_id[(n1,n2)] for _, n1, n2 in edges]
+		scatter_y += [x_elem] * len(edges)
+	#scatter_y, scatter_x, scatter_color = zip(*sorted(zip(scatter_y, scatter_x, scatter_color)))
+
+	plt.scatter(scatter_x, scatter_y, 8, c=scatter_color)
+	plt.xlabel("Edge ID")
+	plt.ylabel(xlabel)
+	plt.show()
 
 
 def main():

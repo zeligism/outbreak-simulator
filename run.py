@@ -15,9 +15,12 @@ def parse_args():
 
 	parser.add_argument("-s", "--random_seed", type=int, default=None,
 		help="Random seed")
-	parser.add_argument("-G", "--graph_type", type=str, default="barabasi_albert",
+	parser.add_argument("-G", "--graph_type", type=str.lower, default="barabasi_albert",
+		choices=("ba", "barabasi_albert", "er", "erdos_renyi"),
 		help="Type of graph to generate")
-	parser.add_argument("--regenerate_graph", action="store_true",
+	parser.add_argument("--graph_args", type=float, nargs="*", default=(),
+		help="Parameters of the graph generator")
+	parser.add_argument("-R", "--regenerate_graph", action="store_true",
 		help="Regenerate graph every simulation")
 	parser.add_argument("-N", "--population", type=int, default=4000,
 		help="Population of community")
@@ -26,11 +29,12 @@ def parse_args():
 		help="Number of individuals initially infected")
 	parser.add_argument("-b", "--infection_rate", type=float, default=0.05,
 		help="The daily probability of infecting a neighbor")
-	parser.add_argument("--gamma_infection", action="store_true",
-		help="Use an infection rate that follows a gamma distribution-like curve")
+	parser.add_argument("--infection_curve", type=str.lower, default="gamma",
+		choices=("constant", "gamma"),
+		help="Type of infection curve (curve of infectiosness vs. duration since infected).")
 	parser.add_argument("--recovery_time", type=int, default=14,
 		help="Minimum time to recover")
-	parser.add_argument("--recovery_rate", type=float, default=0.33,
+	parser.add_argument("--recovery_rate", type=float, default=0.333,
 		help="Daily probability of recovering after `recovery_time`")
 	parser.add_argument("--testing_capacity", type=float, default=1.0,
 		help="Size of testing pool as a percentage of whole population")
@@ -38,6 +42,8 @@ def parse_args():
 		help="Number of testing rounds to run until whole pool is tested")
 	parser.add_argument("--testing_schedule", type=int, nargs="*", default=(1,),
 		help="Cyclic testing schedule as a list of bits (e.g. 1 0 == bi-daily)")
+	parser.add_argument("--sort_tests", type=int, nargs=2, metavar=("MAX_NEIGHBORS", "MAX_DEPTH"),
+		help="Sort test pool using neighbor's priority strategy")
 	parser.add_argument("--test_sensitivity", type=float, default=1.0,
 		help="Sensitivity of test (i.e. rate of true positives among positives)")
 	parser.add_argument("--test_specificity", type=float, default=1.0,
@@ -84,11 +90,13 @@ def main(args):
 		init_random_seed(args.random_seed)
 
 	# Initialize generator of community network
-	if args.graph_type == "barabasi_albert":
-		G = functools.partial(nx.barabasi_albert_graph, args.population, 3)
-	elif args.graph_type == "erdos_renyi":
+	if args.graph_type in ("ba", "barabasi_albert"):
+		graph_args = (3,) if len(args.graph_args) == 0 else args.graph_args
+		G = functools.partial(nx.barabasi_albert_graph, args.population, int(graph_args[0]))
+	elif args.graph_type in ("er", "erdos_renyi"):
 		# Use nx.erdos_renyi_graph if p is large (i.e. graph is not sparse)
-		G = functools.partial(nx.fast_gnp_random_graph, args.population, 0.0025)
+		graph_args = (0.0025,) if len(args.graph_args) == 0 else args.graph_args
+		G = functools.partial(nx.fast_gnp_random_graph, args.population, float(graph_args[0]))
 	else:
 		raise NotImplementedError(f"Graph type {args.graph_type} not implemented")
 
@@ -97,9 +105,11 @@ def main(args):
 		G = G()
 
 	# Initialize simulation configurations
-	infection_rate = InfectionRate(args.infection_rate, args.gamma_infection)
+	infection_rate = InfectionRate(args.infection_rate, args.infection_curve == "gamma")
 	recovery_rate = RecoveryRate(args.recovery_time, args.recovery_rate)
 	testing_schedule = tuple(map(bool, args.testing_schedule))
+	sort_tests = args.sort_tests is not None
+	sort_max_neighbors, sort_max_depth = args.sort_tests if sort_tests else (0, 0)
 	sim_config = {
 		"random_seed": args.random_seed,
 		"G": G,
@@ -109,6 +119,9 @@ def main(args):
 		"testing_capacity": args.testing_capacity,
 		"testing_rounds": args.testing_rounds,
 		"testing_schedule": testing_schedule,
+		"sort_tests": sort_tests,
+		"sort_max_neighbors": sort_max_neighbors,
+		"sort_max_depth": sort_max_depth,
 		"test_sensitivity": args.test_sensitivity,
 		"test_specificity": args.test_specificity,
 		"test_delay": args.test_delay,
