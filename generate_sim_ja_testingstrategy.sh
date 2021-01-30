@@ -7,8 +7,8 @@ rm -f "$ja_file"
 mkdir -p "$data_dir"
 
 GRAPH_TYPES=("BA" "ER")
-BA_PARAMS=(2 3 4)
-ER_PARAMS=(0.0010 0.0025 0.0040)
+BA_ARGS=(2 3 4)
+ER_ARGS=(0.0010 0.0025 0.0040)
 MAX_NEIGHBORS=(2 3 4)
 MAX_DEPTH=(2 3 4)
 
@@ -27,7 +27,11 @@ baserun+=" --testing_schedule 1 1 1 1 1 0 0"
 baserun+=" --max_t 225"
 
 for graph_type in "${GRAPH_TYPES[@]}"; do
-  GRAPH_ARGS=()
+  if [[ "$graph_type" == "BA" ]]; then
+    GRAPH_ARGS=("${BA_ARGS[@]}")
+  else
+    GRAPH_ARGS=("${ER_ARGS[@]}")
+  fi
   for graph_args in "${GRAPH_ARGS[@]}"; do
     for max_neighbors in "${MAX_NEIGHBORS[@]}"; do
       for max_depth in "${MAX_DEPTH[@]}"; do
