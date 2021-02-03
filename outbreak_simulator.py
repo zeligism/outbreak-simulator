@@ -569,6 +569,15 @@ def plot_averaged_SIRs(SIRs,
 			for comp_line in SIR_lines[comp]:
 				plt.plot(comp_line, color=colors[comp], linewidth=0.5)
 
+	# Record peak of I's average and average of I's peaks
+	peak_I_avg = SIR_lines["I"].mean(0).max()
+	avg_I_peak = SIR_lines["I"].max(1).mean()
+	# Mark max avg. I and avg. max I
+	plt.axhline(y=peak_I_avg, color=colors["I"], linestyle=":",
+		label=f"peak of I avg. = {peak_I_avg:.1f}")
+	plt.axhline(y=avg_I_peak, color="r", linestyle="--",
+		label=f"Avg. of I peaks = {avg_I_peak:.1f}")
+
 	# Configure plot, show, and save
 	plt.legend()
 	plt.grid(which="major")
@@ -576,6 +585,8 @@ def plot_averaged_SIRs(SIRs,
 		plt.title(f"SIR Curves of {len(SIRs)} Simulations")
 	else:
 		plt.title(figtitle)
+
+	# Show plot
 	if show_plot:
 		plt.show()
 	if figname is not None:
