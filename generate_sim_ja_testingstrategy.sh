@@ -19,14 +19,12 @@ baserun="time python run.py"
 baserun+=" --random_seed 123"
 #baserun+=" --regenerate_graph"
 baserun+=" --num_sim 100"
-baserun+=" --infection_rate 0.035"
-baserun+=" --infection_curve gamma"
 baserun+=" --recovery_time 14"
 baserun+=" --recovery_rate 0.3333"
 baserun+=" --testing_capacity 1.0"
 baserun+=" --testing_rounds 10"
 #baserun+=" --testing_schedule 1 1 1 1 1 0 0"
-baserun+=" --max_t 225"
+baserun+=" --max_t 200"
 
 for infection_rate in "${INFECTION_RATE[@]}"; do
   for infection_curve in "${INFECTION_CURVE[@]}"; do
@@ -48,8 +46,8 @@ for infection_rate in "${INFECTION_RATE[@]}"; do
             command+=" --graph_args $graph_args"
             command+=" --sort_tests $max_neighbors $max_depth"
             # Choose a unique name for this figure
-            figname="G=${graph_type}(${graph_args})_sort(${max_neighbors},${max_depth})_b=$infection_curve($infection_rate)"
-            figtitle="${graph_type}(${graph_args}), sort(${max_neighbors}, ${max_depth}), b=$infection_curve($infection_rate)"
+            figname="b=$infection_curve($infection_rate)_G=${graph_type}(${graph_args})_sort(${max_neighbors},${max_depth})"
+            figtitle="b=$infection_curve($infection_rate), ${graph_type}(${graph_args}), sort(${max_neighbors}, ${max_depth})"
             command+=" --figname '${data_dir}/${figname}.png'"
             command+=" --figtitle '$figtitle'"
             # Add command to job array file
@@ -62,8 +60,8 @@ for infection_rate in "${INFECTION_RATE[@]}"; do
         command+=" --infection_curve $infection_curve"
         command+=" --graph_type $graph_type"
         command+=" --graph_args $graph_args"
-        figname="G=${graph_type}(${graph_args})_sort(0,0)_b=$infection_curve($infection_rate)"
-        figtitle="${graph_type}(${graph_args}), no sorting, b=$infection_curve($infection_rate)"
+        figname="b=$infection_curve($infection_rate)_G=${graph_type}(${graph_args})_sort(0,0)"
+        figtitle="b=$infection_curve($infection_rate), ${graph_type}(${graph_args}), no sorting"
         command+=" --figname '${data_dir}/${figname}.png'"
         command+=" --figtitle '$figtitle'"
         echo "$command" >> "$ja_file"
